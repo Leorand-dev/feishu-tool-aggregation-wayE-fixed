@@ -65,7 +65,8 @@ shape check fell through to a standalone reply. The discriminating signal is
    compact status area in a dedicated markdown status element
    (`element_id: "status"`): a primary line
    `⏳ 已执行 N 个工具 · 最后：Read · 12s` (last tool + elapsed, refreshed every
-   5s) plus at most one secondary line with the latest narration. Status lines
+   15s by default via `toolElapsedRefreshMs`, 5–60s) plus at most one
+   secondary line with the latest narration. Status lines
    use single `\n` separators, a 160-char cap per line and a 400-char total
    budget, so progress/narration updates never rewrite the answer content
    element and never grow into a multi-paragraph block.
@@ -103,9 +104,17 @@ shape check fell through to a standalone reply. The discriminating signal is
 12. **Config, i18n & observability V3** — `cardIdleHoldMs`,
     `progressTexts` (waiting/completed/compacting/processing strings),
     `narrationMaxChars`, `showLastToolLabel`, `showToolElapsed`,
-    `cardStatusElement`, `prewarmCard`; 15s start-failure
+    `toolElapsedRefreshMs`, `cardStatusElement`, `cardStatusPosition`,
+    `prewarmCard`; 15s start-failure
     backoff; card-start latency logs; running tool total (no per-event reduce)
     and surrogate-safe truncation.
+14. **Display polish batch 2** — `cardStatusPosition: top|bottom` A/B switch,
+    reasoning preview capped at `reasoningMaxLines` (default 12) with an
+    ellipsis, thinking hidden from the final card by default
+    (`hideReasoningInFinal`), and an optional compact final tool summary
+    (`finalToolSummary`, default off). Elapsed refresh is now 15s by default
+    and configurable via `toolElapsedRefreshMs`; disabling `showToolElapsed`
+    skips the refresh timer entirely.
 13. **Cleanup** — 2026.10.2 leftovers (`markVisibleReplySent`,
     `buildAggregatedToolSummaryLine`, `aggregatedToolSummaryLine`,
     `backfillTotal`, the card/tool backfill block) are removed.
@@ -114,7 +123,7 @@ shape check fell through to a standalone reply. The discriminating signal is
 
 | plugin build | patch file | pristine sha256 | patched sha256 |
 | --- | --- | --- | --- |
-| `@openclaw/feishu` 2026.10.5 | `patches/2026.10.5/feishu-tool-aggregation.patch` | `72a0a198…3bfe` | `ba5e6b23…bc8d` |
+| `@openclaw/feishu` 2026.10.5 | `patches/2026.10.5/feishu-tool-aggregation.patch` | `72a0a198…3bfe` | `1d9eb846…f3e8` |
 | `@openclaw/feishu` 2026.10.2 | `patches/2026.10.2/feishu-tool-aggregation-wayE.patch` | `8ae0e845…5eac` | `97ca5ce4…d867` |
 | `@openclaw/feishu` 2026.10.1 | `patches/2026.10.1/feishu-tool-aggregation-wayE.patch` | `9bbbd0c3…d2d9` | `8cbe577b…4644` |
 
@@ -198,7 +207,7 @@ card now carries a compact progress area:
 ```
 
 The first line is the waiting line (with last tool and elapsed time when
-enabled); the second line is the latest narration. Both are capped so they
+enabled, refreshed every 15s by default); the second line is the latest narration. Both are capped so they
 stay close to two visual lines instead of growing into paragraphs.
 
 Mid-turn narration (`💬 …`) is displayed inside the same card as a single
@@ -229,10 +238,15 @@ instead of being dropped — content safety comes before "zero bubbles".
 | `progressTexts.toolCompleted` | `✅ 已执行 {count} 个工具` | tool-only completion line |
 | `progressTexts.compacting` | `📦 **Compacting context...**` | compaction line |
 | `showLastToolLabel` | `true` | append `（最后：Read）`-style detail to the waiting line |
-| `showToolElapsed` | `true` | append elapsed seconds (e.g. `12s`) to the waiting line; refreshed every 5s |
+| `showToolElapsed` | `true` | append elapsed seconds (e.g. `12s`) to the waiting line; disabling skips the refresh timer |
+| `toolElapsedRefreshMs` | `15000` | elapsed refresh interval (5–60s) |
 | `narrationMaxChars` | `120` | max code points for the narration ticker (40–500) |
 | `progressTexts.processing` | `✍️ 正在生成回复…` | fallback status when assistant starts before first token/tool |
 | `progressTexts.prewarm` | `⏳ 已收到，正在处理…` | initial status on a prewarmed blank card |
+| `cardStatusPosition` | `bottom` | status element position: `bottom` (current) or `top` for always-visible progress (A/B) |
+| `reasoningMaxLines` | `12` | max reasoning preview lines (2–100), followed by `…` |
+| `hideReasoningInFinal` | `true` | hide thinking from the final card when an answer exists |
+| `finalToolSummary` | `false` | append `> ✅ N 个工具 · 12s` to a mixed final answer |
 
 ### Requires `verboseLevel: on`
 

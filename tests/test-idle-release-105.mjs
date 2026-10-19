@@ -122,7 +122,7 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
   ok("new activity can clear pending timer", sandbox.getTimer() === undefined);
 
   // 8) helpers used by close/reset/new-reply paths
-  ok("performStreamingClose clears hold timer", /const performStreamingClose = async[\s\S]{0,120}clearIdleCloseTimer\(\);/.test(src));
+  ok("performStreamingClose clears hold timer", /const performStreamingClose = async[\s\S]{0,300}clearIdleCloseTimer\(\);/.test(src));
   ok("resetStreamingState clears timer", /const resetStreamingState = \(\) => \{[\s\S]*?clearIdleCloseTimer\(\);[\s\S]*?lastToolActivityAt = 0;/.test(src));
   ok("onReplyStart clears timer", /onReplyStart: async \(\) => \{[\s\S]*?clearIdleCloseTimer\(\);[\s\S]*?lastToolActivityAt = 0;/.test(src));
   ok("aggregator clears pending timer", /aggregatedToolTotal \+= 1;[\s\S]{0,320}clearIdleCloseTimer\(\);/.test(src));
@@ -138,7 +138,7 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
   ok("answer text preserved", resolveSandbox.resolve("", "final answer") === "final answer");
   resolveSandbox.setTotal(0);
   ok("empty without tools stays empty", resolveSandbox.resolve("", "") === "");
-  ok("final card text helper wired into close", /let text = resolveFinalCardText\(finalizedReasoningText, finalizedAnswerText\);/.test(src));
+  ok("final card text helper wired into close", /let text = resolveFinalCardText\(finalReasoningText, finalizedAnswerText\);/.test(src));
 
   finish("2026.10.5 idle/timer/content");
 })().catch((error) => {

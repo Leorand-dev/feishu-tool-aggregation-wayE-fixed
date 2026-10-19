@@ -69,7 +69,7 @@ ok("status failure invokes fallback callback", statusFailed === true);
 
 // ---------- 3) structural: dual element + status API + fallback + configs ----------
 ok("card JSON includes status element", /element_id: "status"/.test(src));
-ok("status element only when enabled", /if \(this\.statusElementEnabled\) elements\.push\(\{\s*tag: "markdown",\s*content: "",\s*element_id: "status"/.test(src));
+ok("status element only when enabled / position configurable", /element_id: "status"/.test(src) && /this\.statusElementEnabled && this\.statusPosition === "top"/.test(src) && /this\.statusElementEnabled && this\.statusPosition !== "top"/.test(src));
 ok("session has updateStatus", /async updateStatus\(text\) \{/.test(src));
 ok("status element endpoint used", /`\/\$\{this\.state\.cardId\}\/elements\/status\/content`/.test(src));
 ok("status write uses shared sequence/uuid", /uuid: `st_\$\{this\.state\.cardId\}_\$\{this\.state\.sequence\}`/.test(src));
@@ -114,7 +114,7 @@ ok("narration max configurable and default 120", /const configured = Number\(acc
 ok("status lines use single newline", /return truncateDisplayText\(lines\.join\("\\n"\), STATUS_MAX_CHARS\)/.test(src));
 ok("waiting line has last-tool detail", /SHOW_LAST_TOOL_LABEL && lastToolLabel/.test(src) && /const details = \[\];/.test(src));
 ok("waiting line has elapsed detail", /SHOW_TOOL_ELAPSED && toolPhaseStartedAt > 0/.test(src) && /formatElapsedDuration\(elapsedMs\)/.test(src));
-ok("elapsed refresh timer 5s", /TOOL_ELAPSED_REFRESH_MS = 5e3;/.test(src) && /scheduleWaitingRefresh\(\);/.test(src));
+ok("elapsed refresh timer configurable, default 15s", /toolElapsedRefreshMs/.test(src) && /configured >= 5e3 && configured <= 6e4 \? configured : 15e3/.test(src) && /if \(!SHOW_TOOL_ELAPSED \|\| waitingRefreshTimer/.test(src) && /scheduleWaitingRefresh\(\);/.test(src));
 ok("elapsed timer cleared on final/close/reply", (src.match(/clearWaitingRefreshTimer\(\);/g) || []).length >= 4);
 ok("assistant start keeps initial status when blank", /else \{[\s\S]{0,400}if \(!prewarmStatusLine && !waitingLine\) \{\s*prewarmStatusLine = resolveProgressText\("processing"/.test(src));
 {
@@ -138,6 +138,28 @@ return { build: buildWaitingLine, start: (ms) => { toolPhaseStartedAt = Date.now
   fn.start(12_000);
   const line = fn.build(3);
   ok("waiting line includes elapsed", /12s/.test(line) && line.includes("最后：Read"), line);
+}
+
+// ---------- 6) display batch 2: status position, reasoning cap/final hide, final summary ----------
+ok("status position config exists", /cardStatusPosition === "top" \? "top" : "bottom"/.test(src));
+ok("status position passed to session", /statusPosition \}/.test(src) && /this\.statusPosition = options\.statusPosition === "top" \? "top" : "bottom";/.test(src));
+ok("reasoning max lines configurable (default 12)", /reasoningMaxLines/.test(src) && /configured >= 2 && configured <= 100 \? configured : 12/.test(src));
+ok("reasoning preview adds ellipsis when capped", src.includes("lines.length > REASONING_MAX_LINES") && src.includes("Math.max(1, REASONING_MAX_LINES - 1)"));
+ok("final hides reasoning by default", /HIDE_REASONING_IN_FINAL = account\.config\?\.hideReasoningInFinal !== false;/.test(src) && /const finalReasoningText = HIDE_REASONING_IN_FINAL && finalizedAnswerText\.trim\(\) \? "" : finalizedReasoningText;/.test(src));
+ok("optional final tool summary (default off)", /FINAL_TOOL_SUMMARY = account\.config\?\.finalToolSummary === true;/.test(src) && /finalToolSummary/.test(src));
+{
+  const fmtBody = extractArrow(src, "formatReasoningPrefix");
+  const fmt = new Function(`
+const REASONING_MAX_LINES = 12;
+${fmtBody}
+return formatReasoningPrefix;
+`)();
+  const input = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n");
+  const out = fmt(input);
+  const bodyLines = out.split("\n").filter((l) => l.startsWith("> ") && !l.includes("Thinking"));
+  ok("reasoning preview capped to 12 lines", bodyLines.length === 12, `lines=${bodyLines.length}`);
+  ok("reasoning preview ends with ellipsis", bodyLines.at(-1) === "> …", JSON.stringify(bodyLines.slice(-2)));
+  ok("reasoning preview keeps first lines", out.includes("line 1") && !out.includes("line 30"));
 }
 
 finish("2026.10.5 display/backfill/session");

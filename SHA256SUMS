@@ -1,4 +1,4 @@
-ac7888cded723fadbd4ad8bc5340e5ca218f3200788701d162e9f3a62b3f9415  install.sh
+407dfb6f4ee6c6dafe5e01e3e05b839032fc80d1090216dcd149b2df465e36ab  install.sh
 82f9f972a2eae12e5d2949b329780c145fcf86caeb26d99a951f717a6c605290  patches/2026.10.1/feishu-tool-aggregation-wayE.patch
 4e7e1b3e109faa8191233ffd591a8f29603e05052158524047203e2507e48992  patches/2026.10.2/feishu-tool-aggregation-wayE.patch
-1ee0881b7d40652462a95981945ce46f349ce19cf06a792c76e52b41a82c23b9  patches/2026.10.5/feishu-tool-aggregation.patch
+6f988c9638bfed08495f0aa4d6d382b3b07a394b10b53c448a2924691a6783f8  patches/2026.10.5/feishu-tool-aggregation.patch
