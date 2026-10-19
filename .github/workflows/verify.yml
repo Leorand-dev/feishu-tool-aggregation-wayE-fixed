@@ -1,0 +1,36 @@
+name: verify-patch
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Fetch pristine @openclaw/feishu 2026.10.5 bundle
+        run: |
+          set -euo pipefail
+          TARBALL=$(npm pack @openclaw/feishu@2026.10.5 --pack-destination "$RUNNER_TEMP" | tail -1)
+          mkdir -p "$RUNNER_TEMP/pkg"
+          tar -xzf "$RUNNER_TEMP/$TARBALL" -C "$RUNNER_TEMP/pkg"
+          TARGET=$(find "$RUNNER_TEMP/pkg" -path '*/.setup/monitor.account-*.mjs' | head -1)
+          test -n "$TARGET"
+          echo "TARGET=$TARGET" >> "$GITHUB_ENV"
+
+      - name: Apply patch (installer verifies hashes)
+        run: |
+          set -euo pipefail
+          chmod +x install.sh
+          ./install.sh "$TARGET"
+
+      - name: Run the 2026.10.5 test suites
+        run: |
+          set -euo pipefail
+          cd tests
+          node run-all.mjs "$TARGET"

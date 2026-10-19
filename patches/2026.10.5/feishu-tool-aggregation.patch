@@ -1,0 +1,682 @@
+--- original.mjs
++++ patched.mjs
+@@ -1150,7 +1150,7 @@
+ 	return `${previous}${next}`;
+ }
+ var FeishuStreamingSession = class {
+-	constructor(client, creds, log) {
++	constructor(client, creds, log, options = {}) {
+ 		this.state = null;
+ 		this.queue = Promise.resolve();
+ 		this.closed = false;
+@@ -1161,6 +1161,13 @@
+ 		this.client = client;
+ 		this.creds = creds;
+ 		this.log = log;
++		this.statusElementEnabled = options.statusElement !== false;
++		this.statusSentText = "";
++		this.statusPendingText = null;
++		this.statusFlushTimer = null;
++		this.statusLastUpdateTime = 0;
++		this.statusUnavailable = false;
++		this.statusConfirmed = false;
+ 	}
+ 	async requestCardKit(path, operation, method, body, readResponse, token) {
+ 		const auditContext = `feishu.streaming-card.${operation}`;
+@@ -1192,6 +1199,11 @@
+ 			content: "",
+ 			element_id: "content"
+ 		}];
++		if (this.statusElementEnabled) elements.push({
++			tag: "markdown",
++			content: "",
++			element_id: "status"
++		});
+ 		if (options?.note) {
+ 			elements.push({ tag: "hr" });
+ 			elements.push({
+@@ -1324,6 +1336,79 @@
+ 		this.lastUpdateTime = now;
+ 		await this.flushPendingUpdate();
+ 	}
++	clearStatusFlushTimer() {
++		if (this.statusFlushTimer) {
++			clearTimeout(this.statusFlushTimer);
++			this.statusFlushTimer = null;
++		}
++	}
++	schedulePendingStatusFlush() {
++		if (this.statusFlushTimer || this.statusPendingText === null || this.closed) return;
++		const delayMs = Math.max(0, this.updateThrottleMs - (Date.now() - this.statusLastUpdateTime));
++		this.statusFlushTimer = setTimeout(() => {
++			this.statusFlushTimer = null;
++			if (this.statusPendingText === null || this.closed) return;
++			this.statusLastUpdateTime = Date.now();
++			this.flushPendingStatusUpdate().catch((error) => this.log?.(`Scheduled status flush failed: ${String(error)}`));
++		}, delayMs);
++	}
++	async writeStatusContent(text) {
++		if (!this.state || !this.statusElementEnabled) return false;
++		// CardKit rejects empty element content (HTTP 400 / field validation failed).
++		const safeText = typeof text === "string" && text.trim() !== "" ? text : "\u200B";
++		this.state.sequence += 1;
++		try {
++			await this.requestCardKit(`/${this.state.cardId}/elements/status/content`, "status-update", "PUT", () => ({
++				content: safeText,
++				sequence: this.state.sequence,
++				uuid: `st_${this.state.cardId}_${this.state.sequence}`
++			}), (response, auditContext) => assertSuccessfulCardKitResponse(response, auditContext, "Update card status content"));
++			if (!this.statusConfirmed) {
++				this.statusConfirmed = true;
++				this.log?.("Card status element update OK");
++			}
++			return true;
++		} catch (error) {
++			this.statusUnavailable = true;
++			this.log?.(`Status update failed: ${String(error)}`);
++			return false;
++		}
++	}
++	async flushPendingStatusUpdate() {
++		let sent = true;
++		this.queue = this.queue.then(async () => {
++			if (!this.state || this.closed) return;
++			const nextText = this.statusPendingText;
++			if (nextText === null) return;
++			this.statusPendingText = null;
++			if (nextText === this.statusSentText) return;
++			sent = await this.writeStatusContent(nextText);
++			// Cache the attempted text either way to avoid tight retry loops; the caller
++			// falls back to rendering status inside the content element on failure.
++			this.statusSentText = nextText;
++		});
++		await this.queue;
++		return sent;
++	}
++	async updateStatus(text) {
++		if (!this.state || this.closed || !this.statusElementEnabled || this.statusUnavailable || typeof text !== "string") return true;
++		const safeText = text.trim() !== "" ? text : "\u200B";
++		if (safeText === this.statusSentText && safeText === this.statusPendingText) return true;
++		this.statusPendingText = safeText;
++		this.clearStatusFlushTimer();
++		const shouldForce = shouldPushStreamingUpdate(this.statusSentText, safeText);
++		const now = Date.now();
++		if (!shouldForce && now - this.statusLastUpdateTime < this.updateThrottleMs) {
++			this.schedulePendingStatusFlush();
++			return true;
++		}
++		this.statusLastUpdateTime = now;
++		return await this.flushPendingStatusUpdate();
++	}
++	isStatusUnavailable() {
++		return this.statusUnavailable || !this.statusElementEnabled;
++	}
++
+ 	async updateNoteContent(note) {
+ 		if (!this.state || !this.state.hasNote) return;
+ 		this.state.sequence += 1;
+@@ -1355,6 +1440,13 @@
+ 				visibleContentSent = Boolean(text.trim());
+ 			}
+ 		}
++		this.clearStatusFlushTimer();
++		this.statusPendingText = null;
++		if (this.statusElementEnabled && this.statusSentText !== "\u200B") {
++			this.statusSentText = "\u200B";
++			await this.writeStatusContent("\u200B").catch(() => false);
++		}
++
+ 		if (options?.note) await this.updateNoteContent(options.note);
+ 		const acceptedText = this.state.sentText;
+ 		this.state.sequence += 1;
+@@ -1390,6 +1482,7 @@
+ 		if (!messageId) return this.closeWithResult("");
+ 		this.closed = true;
+ 		this.clearFlushTimer();
++		this.clearStatusFlushTimer();
+ 		await this.queue;
+ 		try {
+ 			const response = await this.client.im.message.delete({ path: { message_id: messageId } });
+@@ -1412,10 +1505,19 @@
+ //#region extensions/feishu/src/streaming-update.ts
+ /** Admit captured snapshots in order while the session owns provider writes. */
+ function queueFeishuStreamingUpdate(params) {
+-	const { queue, session, generation, startPromise, text, accountId, runtime } = params;
++	const { queue, session, generation, startPromise, content, status, text, accountId, runtime, statusElement = true, onStatusUnavailable } = params;
+ 	return queue.then(async () => {
+ 		if (startPromise) await startPromise;
+-		if (generation !== void 0 && session?.isActive()) session.update(text).catch((error) => runtime.error?.(`feishu[${accountId}] streaming update failed: ${String(error)}`));
++		if (!(generation !== void 0 && session?.isActive())) return;
++		const contentText = typeof content === "function" ? content() : content ?? text;
++		if (contentText !== void 0) session.update(contentText).catch((error) => runtime.error?.(`feishu[${accountId}] streaming update failed: ${String(error)}`));
++		if (statusElement && typeof session.updateStatus === "function") {
++			const statusText = typeof status === "function" ? status() : status;
++			if (statusText !== void 0) {
++				const sent = await session.updateStatus(statusText).catch(() => false);
++				if (sent === false) onStatusUnavailable?.();
++			}
++		}
+ 	});
+ }
+ //#endregion
+@@ -1527,7 +1629,7 @@
+ * Messages older than this are likely replays after context compaction (#30418). */
+ const TYPING_INDICATOR_MAX_AGE_MS = 12e4;
+ const MS_EPOCH_MIN = 0xe8d4a51000;
+-const STREAMING_START_FAILURE_BACKOFF_MS = 6e4;
++	const STREAMING_START_FAILURE_BACKOFF_MS = 15e3;
+ const NO_VISIBLE_REPLY_FALLBACK_TEXT = "⚠️ This reply completed without visible content. The turn may have been interrupted; please retry or ask me to recover from recent context.";
+ function isStreamingStartBackedOff(accountId, now = Date.now()) {
+ 	const backoffUntil = streamingStartBackoffUntilByAccount.get(accountId);
+@@ -1638,7 +1740,28 @@
+ 	let streamText = "";
+ 	let lastPartial = "";
+ 	let reasoningText = "";
+-	let statusLine = "";
++	let waitingLine = "";
++	let itemStatusLine = "";
++	let compactionLine = "";
++	let narrationLine = "";
++	let lastToolLabel = "";
++	let aggregatedToolTotal = 0;
++	let prewarmRequested = false;
++	let prewarmStatusLine = "";
++	let renderEpoch = 0;
++	let cardFlushPending = false;
++	const NARRATION_MAX_CHARS = 240;
++	const STATUS_MAX_CHARS = 600;
++	let lastToolActivityAt = 0;
++	let idleCloseTimer;
++	// Gap allowed between tool batches before the card is closed; keeps one card per
++	// tool-heavy turn without pinning it open indefinitely (configurable 2-30s).
++	const CARD_IDLE_HOLD_MS = (() => {
++		const configured = Number(account.config?.cardIdleHoldMs);
++		return Number.isFinite(configured) && configured >= 2e3 && configured <= 3e4 ? configured : 8000;
++	})();
++	const statusElementEnabled = account.config?.cardStatusElement !== false;
++	const aggregatedToolSummaryCounts = /* @__PURE__ */ new Map();
+ 	let snapshotBaseText = "";
+ 	let lastSnapshotTextLength = 0;
+ 	let hasStreamingFinalText = false;
+@@ -1661,20 +1784,95 @@
+ 		if (!thinking) return "";
+ 		return `> 💭 **Thinking**\n${thinking.replace(/^(?:Reasoning:|Thinking\.{0,3})\s*/u, "").replace(/^_(.*)_$/gm, "$1").split("\n").map((line) => `> ${line}`).join("\n")}`;
+ 	};
+-	const buildCombinedStreamText = (thinking, answer) => {
+-		return [[thinking ? formatReasoningPrefix(thinking) : "", answer].filter(Boolean).join("\n\n---\n\n"), statusLine].filter(Boolean).join("\n\n");
+-	};
+-	const flushStreamingCardUpdate = (combined) => {
+-		partialUpdateQueue = queueFeishuStreamingUpdate({
++	const truncateDisplayText = (text, max) => {
++		const chars = Array.from(text);
++		if (chars.length <= max) return text;
++		return `${chars.slice(0, Math.max(0, max - 1)).join("")}\u2026`;
++	};
++	const resolveProgressText = (key, fallback) => {
++		const configured = account.config?.progressTexts?.[key];
++		return typeof configured === "string" && configured.trim() ? configured : fallback;
++	};
++	const buildCombinedStreamText = (thinking, answer) => [thinking ? formatReasoningPrefix(thinking) : "", answer].filter(Boolean).join("\n\n---\n\n");
++	const buildWaitingLine = (total) => {
++		const template = resolveProgressText("toolWaiting", "\u23F3 \u5df2\u6267\u884c {count} \u4e2a\u5de5\u5177\uff0c\u7b49\u5f85\u4e2d\u2026");
++		const base = template.split("{count}").join(String(total));
++		if (account.config?.showLastToolLabel === true && lastToolLabel) return `${base}\uff08\u6700\u540e\uff1a${lastToolLabel}\uff09`;
++		return base;
++	};
++	const buildCompletedLine = (total) => {
++		const template = resolveProgressText("toolCompleted", "\u2705 \u5df2\u6267\u884c {count} \u4e2a\u5de5\u5177");
++		return template.split("{count}").join(String(total));
++	};
++	const buildCompactingLine = () => resolveProgressText("compacting", "\u{1F4E6} **Compacting context...**");
++	const buildStatusText = () => {
++		const parts = [waitingLine, narrationLine, itemStatusLine, compactionLine].filter(Boolean);
++		if (parts.length === 0) return "";
++		return truncateDisplayText(parts.join("\n\n"), STATUS_MAX_CHARS);
++	};
++	const renderCardContent = () => {
++		const body = buildCombinedStreamText(reasoningText, streamText);
++		const statusFallback = !statusElementEnabled || streaming?.isStatusUnavailable?.() === true ? buildStatusText() : "";
++		return [body, statusFallback].filter(Boolean).join("\n\n");
++	};
++	const flushCardUpdate = (force = false) => {
++		if (!streamingEnabled || renderMode === "raw") return;
++		const active = streaming?.isActive() === true;
++		if (!active && !streamingStartPromise) return;
++		if (!active && cardFlushPending && !force) return;
++		if (!active) cardFlushPending = true;
++		const queued = queueFeishuStreamingUpdate({
+ 			queue: partialUpdateQueue,
+ 			session: streaming,
+ 			generation: activeStreamingGeneration,
+ 			startPromise: streamingStartPromise,
+-			text: combined,
++			content: () => renderCardContent(),
++			status: () => buildStatusText(),
++			statusElement: statusElementEnabled,
++			onStatusUnavailable: () => { cardFlushPending = false; flushCardUpdate(true); },
+ 			accountId: account.accountId,
+ 			runtime: params.runtime
+ 		});
+-	};
++		partialUpdateQueue = queued.finally(() => {
++			cardFlushPending = false;
++		});
++	};
++	const clearPrewarmStatus = () => {
++		if (!prewarmStatusLine) return;
++		if (waitingLine === prewarmStatusLine) waitingLine = "";
++		prewarmStatusLine = "";
++	};
++	const updateStreamingStatusLine = (nextStatusLine, startIfNeeded = true) => {
++		clearPrewarmStatus();
++		itemStatusLine = nextStatusLine;
++		if (!Boolean(streaming?.isActive() || streamingStartPromise) && (!startIfNeeded || renderMode !== "card")) return false;
++		startStreaming();
++		flushCardUpdate();
++		return false;
++	};
++	const updateWaitingLine = (nextWaitingLine) => {
++		prewarmStatusLine = "";
++		waitingLine = nextWaitingLine;
++		flushCardUpdate();
++		return false;
++	};
++	const clearTransientStatusLines = () => {
++		itemStatusLine = "";
++		compactionLine = "";
++		narrationLine = "";
++		if (prewarmStatusLine) {
++			if (waitingLine === prewarmStatusLine) waitingLine = "";
++			prewarmStatusLine = "";
++		}
++	};
++	const clearCardStatusLines = () => {
++		waitingLine = "";
++		itemStatusLine = "";
++		compactionLine = "";
++		narrationLine = "";
++		prewarmStatusLine = "";
++	};
++
+ 	const queueStreamingUpdate = (nextText, options) => {
+ 		if (!nextText) return;
+ 		if (options?.dedupeWithLastPartial && nextText === lastPartial) return;
+@@ -1688,10 +1886,13 @@
+ 			} else streamText = `${snapshotBaseText}${mergeStreamingText(currentSnapshotText, nextText)}`;
+ 			lastSnapshotTextLength = nextText.length;
+ 		}
+-		flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
++		if (streamText.trim()) clearPrewarmStatus();
++		flushCardUpdate();
+ 	};
+ 	const startStreaming = () => {
+ 		if (!streamingEnabled || streamingStartPromise || streaming || isStreamingStartBackedOff(account.accountId)) return;
++		const prewarmForThisStart = prewarmRequested;
++		prewarmRequested = false;
+ 		streamingStartPromise = (async () => {
+ 			const creds = account.appId && account.appSecret ? {
+ 				appId: account.appId,
+@@ -1700,7 +1901,8 @@
+ 				httpTimeoutMs: resolveConfiguredHttpTimeoutMs(account)
+ 			} : null;
+ 			if (!creds) return;
+-			const session = new FeishuStreamingSession(createFeishuClient(account), creds, (message) => params.runtime.log?.(`feishu[${account.accountId}] ${message}`));
++			const cardStartAt = Date.now();
++			const session = new FeishuStreamingSession(createFeishuClient(account), creds, (message) => params.runtime.log?.(`feishu[${account.accountId}] ${message}`), { statusElement: statusElementEnabled });
+ 			const generation = ++streamingGeneration;
+ 			streaming = session;
+ 			activeStreamingGeneration = generation;
+@@ -1715,6 +1917,12 @@
+ 					header: cardHeader,
+ 					note: cardNote
+ 				});
++				params.runtime.log?.(`feishu[${account.accountId}] streaming card ready in ${Date.now() - cardStartAt}ms`);
++				if (prewarmForThisStart && !streamText && !reasoningText && !waitingLine && !itemStatusLine && !compactionLine && !narrationLine && aggregatedToolTotal === 0) {
++					prewarmStatusLine = resolveProgressText("prewarm", "\u23F3 \u5df2\u6536\u5230\uff0c\u6b63\u5728\u5904\u7406\u2026");
++					waitingLine = prewarmStatusLine;
++					flushCardUpdate();
++				}
+ 				streamingStartBackoffUntilByAccount.delete(account.accountId);
+ 			} catch (error) {
+ 				streamingStartBackoffUntilByAccount.set(account.accountId, Date.now() + STREAMING_START_FAILURE_BACKOFF_MS);
+@@ -1735,11 +1943,43 @@
+ 		streamText = "";
+ 		lastPartial = "";
+ 		reasoningText = "";
+-		statusLine = "";
++		clearCardStatusLines();
++		renderEpoch += 1;
++		aggregatedToolSummaryCounts.clear();
++		aggregatedToolTotal = 0;
++		lastToolLabel = "";
++		prewarmRequested = false;
++		prewarmStatusLine = "";
++		cardFlushPending = false;
++		clearIdleCloseTimer();
++		lastToolActivityAt = 0;
+ 		snapshotBaseText = "";
+ 		lastSnapshotTextLength = 0;
+ 		hasStreamingFinalText = false;
+ 	};
++
++	const clearIdleCloseTimer = () => {
++		if (idleCloseTimer !== void 0) {
++			clearTimeout(idleCloseTimer);
++			idleCloseTimer = void 0;
++		}
++	};
++	const scheduleIdleCloseTimer = () => {
++		if (idleCloseTimer !== void 0) return;
++		const elapsed = Date.now() - lastToolActivityAt;
++		const remainingMs = Math.max(0, CARD_IDLE_HOLD_MS - (Number.isFinite(elapsed) ? elapsed : CARD_IDLE_HOLD_MS));
++		idleCloseTimer = setTimeout(() => {
++			idleCloseTimer = void 0;
++			queueIdleSideEffects().catch((error) => params.runtime.error?.(`feishu[${account.accountId}] delayed idle finalization failed: ${String(error)}`));
++		}, remainingMs);
++		idleCloseTimer.unref?.();
++	};
++	const resolveFinalCardText = (reasoning, answer) => {
++		const text = buildCombinedStreamText(reasoning, answer);
++		if (text.trim() || aggregatedToolTotal === 0) return text;
++		return buildCompletedLine(aggregatedToolTotal);
++	};
++
+ 	const rememberClosedStreamingSettlement = (generation, content, result, error, disposition = "closed") => {
+ 		if (generation === void 0 || !content && disposition === "closed") return;
+ 		closedStreamingSettlements.set(generation, {
+@@ -1750,6 +1990,8 @@
+ 		});
+ 	};
+ 	const performStreamingClose = async (disposition) => {
++		renderEpoch += 1;
++		clearIdleCloseTimer();
+ 		const streamingToClose = streaming;
+ 		const generationToClose = activeStreamingGeneration;
+ 		const startPromiseToClose = streamingStartPromise;
+@@ -1767,11 +2009,17 @@
+ 			let result = noVisibleFeishuReplyDelivery;
+ 			let finalizationError;
+ 			if (streamingToClose?.isActive()) {
+-				statusLine = "";
+-				const text = buildCombinedStreamText(finalizedReasoningText, finalizedAnswerText);
++				const carriedNarration = narrationLine;
++				clearCardStatusLines();
++				let text = resolveFinalCardText(finalizedReasoningText, finalizedAnswerText);
++				if (!text.trim() && carriedNarration) text = carriedNarration;
++
++				// A warmed-up card may never receive visible content (silent/skip turns).
++				// Discard it instead of leaving an empty closed card in the chat.
++				const shouldDiscardEmptyCard = disposition !== "discarded" && !text.trim() && !carriedNarration && aggregatedToolTotal === 0;
+ 				let closed;
+ 				try {
+-					if (disposition === "discarded") closed = await streamingToClose.discard();
++					if (disposition === "discarded" || shouldDiscardEmptyCard) closed = await streamingToClose.discard();
+ 					else {
+ 						const finalNote = resolveCardNote(agentId, identity, responsePrefixContextProvider());
+ 						closed = await streamingToClose.closeWithResult(text, { note: finalNote });
+@@ -1853,13 +2101,124 @@
+ 		const outcome = await closeStreaming("discarded");
+ 		if (outcome.error !== void 0) throw toStringifiedError(outcome.error);
+ 	};
+-	const updateStreamingStatusLine = (nextStatusLine, startIfNeeded = true) => {
+-		statusLine = nextStatusLine;
+-		if (!Boolean(streaming?.isActive() || streamingStartPromise) && (!startIfNeeded || renderMode !== "card")) return false;
++	const TOOL_NARRATION_TEXT_PREFIX = "\u{1F4AC} ";
++	const TOOL_LABEL_ALIASES = /* @__PURE__ */ new Map([["session_settings", "sessions"]]);
++	const normalizeToolLabel = (label) => {
++		const normalized = label.trim().toLowerCase().replace(/[\s-]+/g, "_").replace(/^_+|_+$/g, "");
++		return TOOL_LABEL_ALIASES.get(normalized) ?? normalized;
++	};
++	const TOOL_SUMMARY_MAX_CHARS = 400;
++	const getToolSummaryText = (payload, info) => {
++		if (info?.kind !== "tool" || !payload || typeof payload !== "object" || payload.isError === true) return void 0;
++		if (!Object.prototype.hasOwnProperty.call(payload, "mediaUrls")) return void 0;
++		if (payload.mediaUrls !== void 0 && (!Array.isArray(payload.mediaUrls) || payload.mediaUrls.length > 0)) return void 0;
++		if (payload.mediaUrl || payload.mediaUrlFull || payload.audioAsVoice === true) return void 0;
++		if (payload.channelData && Object.keys(payload.channelData).length > 0) return void 0;
++		if (Object.entries(payload).some(([key, value]) => key !== "text" && key !== "mediaUrls" && value !== void 0)) return void 0;
++		const text = typeof payload.text === "string" ? payload.text.trim() : "";
++		if (!text || /[\r\n]/.test(text) || text.length > TOOL_SUMMARY_MAX_CHARS) return void 0;
++		// Never treat narration as a tool summary, even if an envelope adds a mediaUrls key.
++		if (text.startsWith(TOOL_NARRATION_TEXT_PREFIX)) return void 0;
++		return text;
++	};
++	const parseCollapsibleToolSummary = (payload, info) => {
++		const text = getToolSummaryText(payload, info);
++		if (!text) return void 0;
++		const match = text.match(/^(\S+)\s+(.+)$/u);
++		if (!match || !/^\p{Extended_Pictographic}/u.test(match[1])) return void 0;
++		const label = match[2].split(":", 1)[0].trim();
++		if (!label || label.length > 80) return void 0;
++		return {
++			key: `${match[1]}\u0000${label.toLowerCase()}`,
++			icon: match[1],
++			label
++		};
++	};
++	const BARE_TOOL_LABELS = /* @__PURE__ */ new Set([
++		"exec", "bash", "shell", "read", "write", "edit", "apply_patch", "grep",
++		"glob", "ls", "browser", "web_fetch", "web_search", "image", "view_image",
++		"process", "sessions", "message", "task", "todo", "memory", "node", "canvas"
++	]);
++	const parseBareToolLabel = (payload, info) => {
++		const text = getToolSummaryText(payload, info);
++		if (!text) return void 0;
++		// Real openclaw 2026.10.5 emitter shapes: "Exec", "Read: `from /a`",
++		// "Web Fetch: `from ...`", "Apply Patch", "Session Settings". Labels may
++		// contain spaces; any detail after ":" is ignored for aggregation.
++		const colon = text.indexOf(":");
++		const labelText = colon > 0 ? text.slice(0, colon) : text;
++		const normalized = normalizeToolLabel(labelText);
++		if (!BARE_TOOL_LABELS.has(normalized)) return void 0;
++		return {
++			key: `\u{1F6E0}\uFE0F\u0000${normalized}`,
++			icon: `\u{1F6E0}\uFE0F`,
++			label: normalized
++		};
++	};
++	const AGGREGATED_PROGRESS_ITEM_KINDS = /* @__PURE__ */ new Set(["tool", "command", "patch", "search", "api"]);
++	/** Only provable mid-turn narration may be suppressed; everything else keeps legacy delivery. */
++	const isToolNarrationPayload = (payload, info) => {
++		if (info?.kind !== "tool" || !payload || typeof payload !== "object") return false;
++		if (payload.isError === true) return false;
++		if (Object.prototype.hasOwnProperty.call(payload, "mediaUrls")) return false;
++		if (payload.mediaUrl || payload.mediaUrlFull || payload.audioAsVoice === true) return false;
++		if (payload.channelData && Object.keys(payload.channelData).length > 0) return false;
++		if (payload.presentation || payload.interactive) return false;
++		if (Object.entries(payload).some(([key, value]) => key !== "text" && value !== void 0)) return false;
++		return typeof payload.text === "string" && payload.text.startsWith(TOOL_NARRATION_TEXT_PREFIX);
++	};
++	const shouldSuppressItemProgressStatusLine = (itemKind, hasActiveToolBatch) => hasActiveToolBatch === true && AGGREGATED_PROGRESS_ITEM_KINDS.has(itemKind);
++	const normalizeNarrationLine = (text) => {
++		const raw = typeof text === "string" ? text.trim() : "";
++		const withoutPrefix = raw.startsWith(TOOL_NARRATION_TEXT_PREFIX) ? raw.slice(TOOL_NARRATION_TEXT_PREFIX.length).trim() : raw;
++		const collapsed = withoutPrefix.replace(/\s+/g, " ").trim();
++		if (!collapsed) return "";
++		return truncateDisplayText(collapsed, NARRATION_MAX_CHARS);
++	};
++
++	const deliverNarrationToCard = async (text) => {
++		if (!streamingEnabled || renderMode === "raw") return false;
++		const next = normalizeNarrationLine(text);
++		if (!next) return false;
++		const nextLine = `${TOOL_NARRATION_TEXT_PREFIX}${next}`;
++		if (nextLine === narrationLine && streaming?.isActive() === true) return true;
++		const epoch = renderEpoch;
+ 		startStreaming();
+-		flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+-		return false;
+-	};
++		if (streamingStartPromise) await streamingStartPromise;
++		// A clear (final/assistant start/close) happened while the card was starting:
++		// do not resurrect the stale ticker afterwards.
++		if (epoch !== renderEpoch || streaming?.isActive() !== true) return false;
++		clearPrewarmStatus();
++		narrationLine = nextLine;
++		lastToolActivityAt = Date.now();
++		clearIdleCloseTimer();
++		flushCardUpdate();
++		return true;
++	};
++
++	const aggregateCollapsibleToolSummary = async (entry) => {
++		if (!streamingEnabled || renderMode === "raw") return false;
++		const epoch = renderEpoch;
++		startStreaming();
++		if (streamingStartPromise) await streamingStartPromise;
++		if (!streaming?.isActive()) return false;
++		const current = aggregatedToolSummaryCounts.get(entry.key);
++		if (current) current.count += 1;
++		else aggregatedToolSummaryCounts.set(entry.key, {
++			icon: entry.icon,
++			label: entry.label,
++			count: 1
++		});
++		aggregatedToolTotal += 1;
++		lastToolLabel = entry.label;
++		lastToolActivityAt = Date.now();
++		clearIdleCloseTimer();
++		// If the card was cleared while starting (final/assistant start), count the tool but
++		// do not resurrect the waiting line after that clear.
++		if (epoch === renderEpoch) updateWaitingLine(buildWaitingLine(aggregatedToolTotal));
++		return true;
++	};
++
+ 	const sendChunkedTextReply = async (paramsLocal) => {
+ 		const header = paramsLocal.useCard ? resolveCardHeader(agentId, identity) : void 0;
+ 		const note = paramsLocal.useCard ? resolveCardNote(agentId, identity, responsePrefixContextProvider()) : void 0;
+@@ -2125,11 +2484,36 @@
+ 				idleRequestedForReply = false;
+ 				visibleReplySent = false;
+ 				replyOutcome = void 0;
+-			}
+-			if (previewStreamingEnabled && renderMode === "card") startStreaming();
++				aggregatedToolSummaryCounts.clear();
++				aggregatedToolTotal = 0;
++				lastToolLabel = "";
++				prewarmRequested = false;
++				prewarmStatusLine = "";
++				cardFlushPending = false;
++				clearCardStatusLines();
++				clearIdleCloseTimer();
++				lastToolActivityAt = 0;
++				renderEpoch += 1;
++			}
++			if (previewStreamingEnabled && renderMode !== "raw" && account.config?.prewarmCard !== false) {
++				prewarmRequested = true;
++				startStreaming();
++			}
++
+ 			await typingCallbacks?.onReplyStart?.();
+ 		},
+-		onIdle: queueIdleSideEffects,
++		onIdle: () => {
++			// Hold the card across tool batches: only defer while tools were recently active and
++			// no real reply content (text/reasoning/final/visible media) has been delivered yet.
++			const terminalQuiet = replyOutcome?.kind === "suppressed" || replyOutcome?.kind === "failed" || replyOutcome?.kind === "skipped" && replyOutcome.reason === "silent";
++			const hasToolActivity = aggregatedToolTotal > 0;
++			if (!streamText && !reasoningText && deliveredFinalTexts.size === 0 && !visibleReplySent && !terminalQuiet && hasToolActivity && Date.now() - lastToolActivityAt < CARD_IDLE_HOLD_MS) {
++				scheduleIdleCloseTimer();
++				return;
++			}
++			clearIdleCloseTimer();
++			return queueIdleSideEffects();
++		},
+ 		onCleanup: () => {
+ 			typingCallbacks?.onCleanup?.();
+ 		}
+@@ -2157,6 +2541,22 @@
+ 				};
+ 			},
+ 			deliver: async (inputPayload, info) => {
++				const collapsibleToolSummary = parseCollapsibleToolSummary(inputPayload, info) ?? parseBareToolLabel(inputPayload, info);
++				if (collapsibleToolSummary && await aggregateCollapsibleToolSummary(collapsibleToolSummary)) return noVisibleFeishuReplyDelivery;
++				// Only provable mid-turn narration (live shape: {text:"\u{1F4AC} ..."}, no media
++				// or presentation keys) is routed to the in-card ticker; everything else keeps the
++				// legacy delivery path so real tool content is never silently swallowed.
++				// Explicit tool errors stay visible too.
++				if (isToolNarrationPayload(inputPayload, info)) {
++					await deliverNarrationToCard(inputPayload.text);
++					return noVisibleFeishuReplyDelivery;
++				}
++				// Final content supersedes the transient narration ticker.
++				if (info?.kind === "final") {
++					renderEpoch += 1;
++					clearCardStatusLines();
++					flushCardUpdate(true);
++				}
+ 				const prepared = await renderFeishuReplyPayload(inputPayload, {
+ 					to: sendTarget,
+ 					identity,
+@@ -2184,7 +2584,8 @@
+ 					ttsSupplement
+ 				}));
+ 				const finalTextExceedsStreamingLimit = info?.kind === "final" && hasText && text.length > textChunkLimit;
+-				const cardRenderingRequested = renderMode === "card" || info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw" || renderMode === "auto" && shouldUseFeishuCard(text);
++				const midTurnBlockFold = info?.kind === "block" && renderMode !== "raw" && streamingEnabled && streaming?.isActive() === true && aggregatedToolSummaryCounts.size > 0;
++				const cardRenderingRequested = renderMode === "card" || info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw" || renderMode === "auto" && shouldUseFeishuCard(text) || midTurnBlockFold;
+ 				const useStaticCard = hasText && cardRenderingRequested && withinCardTableLimit(text);
+ 				const useStreamingCard = hasText && streamingEnabled && !finalTextExceedsStreamingLimit && (info?.kind === "final" || cardRenderingRequested);
+ 				const skipTextForDuplicateFinal = !hasIndependentPresentation && info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
+@@ -2254,7 +2655,7 @@
+ 								hasStreamingFinalText = true;
+ 								snapshotBaseText = "";
+ 								lastSnapshotTextLength = text.length;
+-								flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
++								flushCardUpdate();
+ 							}
+ 						}
+ 						if (hasMedia) try {
+@@ -2309,15 +2710,21 @@
+ 				startStreaming();
+ 				const nextThinking = formatReasoningMessage(payload.text);
+ 				if (nextThinking) {
++					clearPrewarmStatus();
+ 					reasoningText = nextThinking;
+-					flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
++					flushCardUpdate();
+ 				}
+ 				return false;
+ 			} : void 0,
+ 			onReasoningEnd: reasoningPreviewEnabled ? () => false : void 0,
+ 			onItemEvent: previewStreamingEnabled ? (payload) => {
+ 				if (payload.kind === "preamble" || payload.hideFromChannelProgress || payload.suppressChannelProgress) return false;
++				lastToolActivityAt = Date.now();
++				clearIdleCloseTimer();
+ 				const { kind: itemKind, ...item } = payload;
++				// While the aggregator owns the card progress line, per-item tool lines must not
++				// overwrite the waiting line (single-line UX guarantee).
++				if (shouldSuppressItemProgressStatusLine(itemKind, aggregatedToolTotal > 0)) return false;
+ 				const statusLineLocal = formatChannelProgressDraftLineForEntry(account.config, {
+ 					event: "item",
+ 					itemKind,
+@@ -2326,9 +2733,26 @@
+ 				if (statusLineLocal) return updateStreamingStatusLine(statusLineLocal);
+ 				return false;
+ 			} : void 0,
+-			onAssistantMessageStart: previewStreamingEnabled ? () => updateStreamingStatusLine("", false) : void 0,
+-			onCompactionStart: previewStreamingEnabled ? () => updateStreamingStatusLine("📦 **Compacting context...**") : void 0,
+-			onCompactionEnd: previewStreamingEnabled ? () => updateStreamingStatusLine("") : void 0
++			onAssistantMessageStart: previewStreamingEnabled ? () => {
++				renderEpoch += 1;
++				if (aggregatedToolTotal > 0) clearTransientStatusLines();
++				else clearCardStatusLines();
++				flushCardUpdate(true);
++				return false;
++			} : void 0,
++			onCompactionStart: previewStreamingEnabled ? () => {
++				if (aggregatedToolTotal === 0) {
++					clearPrewarmStatus();
++					compactionLine = buildCompactingLine();
++					flushCardUpdate();
++				}
++				return false;
++			} : void 0,
++			onCompactionEnd: previewStreamingEnabled ? () => {
++				compactionLine = "";
++				flushCardUpdate();
++				return false;
++			} : void 0,
+ 		},
+ 		ensureNoVisibleReplyFallback
+ 	};
