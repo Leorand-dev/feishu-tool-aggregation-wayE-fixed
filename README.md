@@ -42,7 +42,7 @@ shape check fell through to a standalone reply. The discriminating signal is
 - `Array.isArray(undefined)` is `false`, so a value-based check wrongly rejects
   real tool events (this is what an earlier, rejected revision did).
 
-## The patch (23 hunks)
+## The patch (25 hunks)
 
 1. **Parser discriminator** — accept `kind:"tool"` only when an own `mediaUrls`
    key exists and its value is `undefined` or an empty array; ignore its empty
@@ -121,6 +121,13 @@ shape check fell through to a standalone reply. The discriminating signal is
     card is now held until a final delivery; `onCleanup` finalizes silent/abort
     turns. Live verified: one user message → one `Started streaming` / one
     `Closed streaming`.
+
+16. **Body/final dedupe** — block payloads are cumulative, so they are merged
+    with `mergeStreamingText` instead of blindly appended (fixes duplicated
+    answer prefixes inside one card). `deliveredFinalTexts` now records fallback
+    final content and `ensureVisibleStreamingDelivery` records final fallback
+    sends, closing the remaining duplicate-final gap.
+
 13. **Cleanup** — earlier port leftovers (`markVisibleReplySent`,
     `buildAggregatedToolSummaryLine`, `aggregatedToolSummaryLine`,
     `backfillTotal`, the card/tool backfill block) are removed.
@@ -129,7 +136,7 @@ shape check fell through to a standalone reply. The discriminating signal is
 
 | plugin build | patch file | pristine sha256 | patched sha256 |
 | --- | --- | --- | --- |
-| `@openclaw/feishu` 2026.10.5 | `patches/2026.10.5/feishu-tool-aggregation.patch` | `72a0a198…3bfe` | `c1f24a7b…eccc` |
+| `@openclaw/feishu` 2026.10.5 | `patches/2026.10.5/feishu-tool-aggregation.patch` | `72a0a198…3bfe` | `bdd38bc8…a5d4` |
 
 This repository starts with **one supported initial build**. New builds are not
 silently fuzzy-patched: the installer compares SHA-256 against the known

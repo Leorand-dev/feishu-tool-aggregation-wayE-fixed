@@ -6,11 +6,11 @@
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `patches/2026.10.5/feishu-tool-aggregation.patch` | `81d8eabc88dc35204e6c4189aa087b7eea58ca4506ae324b42b7d12c4e984f1a` |
-| `patches/2026.10.5/patched.mjs` | `c1f24a7bc72e7e0d767e452e021aed8e444972518621431b7e5535f71c03eccc` |
+| `patches/2026.10.5/feishu-tool-aggregation.patch` | `82e2a29e2f3c05e7be8828601013b84bfe7e0b7618a2ed350e8f5ff25d967ff7` |
+| `patches/2026.10.5/patched.mjs` | `bdd38bc8c94c971255d45aff2011f256a1aea84c547f021f2df107c77946a5d4` |
 | `patches/2026.10.5/original.mjs`（未改动） | `72a0a198e31e71e4690e2b86296d53983863e99e8d3a0872ac4cbb83aefe3bfe` |
 
-- 补丁：**23 hunks**，`original.mjs` + patch → `patched.mjs` 正/反向 **byte-exact**，offset 全 +0。
+- 补丁：**25 hunks**，`original.mjs` + patch → `patched.mjs` 正/反向 **byte-exact**，offset 全 +0。
 - `original.mjs` 与 npm 官方 `@openclaw/feishu@2026.10.5` 的 `dist/.setup/monitor.account-*.mjs` 完全一致。
 - `patches/SHA256SUMS`、`install.sh`、`README.md` 版本表均已同步。
 
@@ -25,6 +25,7 @@
 | **展示打磨 batch 1** | 初始化/处理状态跨 assistant start 保留，消除第二段空白；状态区紧凑为“主行 + 至多一行旁白”；等待行增加最后工具与耗时（5s 刷新）；旁白上限可配，默认 120 字 |
 | **展示打磨 batch 2** | 耗时刷新默认 15s 可配（`toolElapsedRefreshMs`），关闭 elapsed 不启动定时器；`cardStatusPosition` 支持 status 上下 A/B；reasoning 预览限行（默认 12 行）且 final 默认隐藏 thinking；可选 final 工具摘要（默认关闭） |
 | **单卡生命周期修复** | onIdle 只代表 dispatcher 分段空闲；活动卡保持到 final，避免预热卡提前关闭后 block/final 新建重复卡片；onCleanup 兜底 silent/abort |
+| **正文/ final 去重** | block 文本使用 `mergeStreamingText` 合并，避免正文重复；`deliveredFinalTexts` 记录 fallback final 内容，`ensureVisibleStreamingDelivery` 记录 final fallback，堵住重复 final 路径 |
 | **最新态回填** | `flushCardUpdate` 向队列传 render provider，队列在 `await streamingStartPromise` 之后渲染**最新**展示状态；卡片创建期间更新合并为一次 pending flush（`cardFlushPending`），不再重放旧帧 |
 | **ticker 打磨** | 相同旁白去重、`truncateDisplayText` 按 code point 截断（修复代理对截断），max chars 可配 |
 | **进度计数** | 引入 `aggregatedToolTotal` 运行总数，去掉每个工具事件的全 map `reduce` |
@@ -56,10 +57,9 @@
 | 检查 | 结果 |
 | --- | --- |
 | `node --check patched.mjs` | exit 0 |
-| 补丁应用 | 23 hunks，offset 全 +0，forward **byte-exact** |
+| 补丁应用 | 25 hunks，offset 全 +0，forward **byte-exact** |
 | 反向应用 | reverse **byte-exact** |
 | `SHA256SUMS` | 9/9 一致（10.1/10.2 未改动） |
-| 10.1/10.2 补丁 | 各 7 hunks，正/反向仍 byte-exact |
 
 ### 3.2 2026.10.5 专用测试（`tests/run-all.mjs`，8 套件）
 
@@ -68,11 +68,11 @@
 26 passed, 0 failed (2026.10.5 waiting-line/aggregation)
 26 passed, 0 failed (2026.10.5 block-fold/status-line)
 33 passed, 0 failed (2026.10.5 execution harness)
-26 passed, 0 failed (2026.10.5 idle/timer/content)
+31 passed, 0 failed (2026.10.5 idle/timer/content)
 32 passed, 0 failed (2026.10.5 narration ticker)
-51 passed, 0 failed (2026.10.5 display/backfill/session)
-85 passed, 0 failed (2026.10.5 structural audit)
-8/8 suites passed, 0 failed — 333 assertions
+55 passed, 0 failed (2026.10.5 display/backfill/session)
+92 passed, 0 failed (2026.10.5 structural audit)
+8/8 suites passed, 0 failed — 349 assertions
 ```
 
 新增 `test-display-backfill-105.mjs` 覆盖：
@@ -132,7 +132,7 @@ fixed/
     2026.10.5/
       original.mjs             pristine（本地有，仓库不随附）
       patched.mjs              patched（本地有，仓库不随附）
-      feishu-tool-aggregation.patch   当前 23-hunk 补丁
+      feishu-tool-aggregation.patch   当前 25-hunk 补丁
     SHA256SUMS                 本地校验
   tests/                       2026.10.5 的 8 套件
   tools/

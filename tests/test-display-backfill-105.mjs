@@ -162,4 +162,17 @@ return formatReasoningPrefix;
   ok("reasoning preview keeps first lines", out.includes("line 1") && !out.includes("line 30"));
 }
 
+// ---------- 7) block payloads are merged, never blindly appended ----------
+ok("block delivery uses dedupe merge", /if \(info\?\.kind === "block"\) queueStreamingBlockUpdate\(text\);/.test(src));
+{
+  const start = src.indexOf("function mergeStreamingText(");
+  const end = src.indexOf("\n}\n", start) + 3;
+  const mergeFn = new Function(`${src.slice(start, end)}\nreturn mergeStreamingText;`)();
+  const full = "完整回答：这是最终内容";
+  const prefix = full.slice(0, 8);
+  ok("shorter prefix copy is dropped", mergeFn(full, prefix) === full, JSON.stringify(mergeFn(full, prefix)));
+  ok("longer extension replaces prefix", mergeFn(prefix, full) === full);
+  ok("genuinely new block still appends", mergeFn("block A", "block B") === "block Ablock B");
+}
+
 finish("2026.10.5 display/backfill/session");

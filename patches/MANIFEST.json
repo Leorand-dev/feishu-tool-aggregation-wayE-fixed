@@ -5,8 +5,8 @@
     {
       "version": "2026.10.5",
       "original_sha256": "72a0a198e31e71e4690e2b86296d53983863e99e8d3a0872ac4cbb83aefe3bfe",
-      "patched_sha256": "c1f24a7bc72e7e0d767e452e021aed8e444972518621431b7e5535f71c03eccc",
-      "patch_sha256": "81d8eabc88dc35204e6c4189aa087b7eea58ca4506ae324b42b7d12c4e984f1a",
+      "patched_sha256": "bdd38bc8c94c971255d45aff2011f256a1aea84c547f021f2df107c77946a5d4",
+      "patch_sha256": "82e2a29e2f3c05e7be8828601013b84bfe7e0b7618a2ed350e8f5ff25d967ff7",
       "patch": "2026.10.5/feishu-tool-aggregation.patch",
       "tests": "tests/run-all.mjs",
       "adapter": "anchor-rebase-v1",

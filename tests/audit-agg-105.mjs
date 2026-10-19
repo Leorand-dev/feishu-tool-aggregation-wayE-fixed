@@ -69,10 +69,15 @@ ok("waiting string intact", src.includes("\\u23F3 \\u5df2\\u6267\\u884c {count} 
 ok("waiting line shows last tool / elapsed", /SHOW_LAST_TOOL_LABEL && lastToolLabel/.test(src) && /SHOW_TOOL_ELAPSED && toolPhaseStartedAt > 0/.test(src) && /configured >= 5e3 && configured <= 6e4 \? configured : 15e3/.test(src));
 ok("completed string intact", src.includes("\\u2705 \\u5df2\\u6267\\u884c {count} \\u4e2a\\u5de5\\u5177"));
 ok("bare-label whitelist intact", src.includes("const BARE_TOOL_LABELS = "));
+ok("block text not blindly appended", /if \(info\?\.kind === "block"\) queueStreamingBlockUpdate\(text\);/.test(src) && !/if \(info\?\.kind === "block"\) queueStreamingUpdate\(text, \{/.test(src));
+ok("block merge dedupes overlapping text", /streamText = mergeStreamingText\(streamText, nextText\);/.test(src) && /queueStreamingBlockUpdate/.test(src));
 ok("mid-turn block fold intact", count(src, "const midTurnBlockFold =") === 1);
 ok("counts cleared on reset", /const resetStreamingState = \(\) => \{[\s\S]*?aggregatedToolSummaryCounts\.clear\(\);/.test(src));
 ok("counts cleared on reply start", /onReplyStart: async \(\) => \{[\s\S]*?aggregatedToolSummaryCounts\.clear\(\);/.test(src));
 ok("failed outcome releases hold", /replyOutcome\?\.kind === "failed"/.test(src));
+ok("fallback final content recorded for dedupe", /const deliveredFinalContent = finalizedAnswerText \|\| text;/.test(src) && /deliveredFinalTexts\.add\(deliveredFinalContent\);/.test(src));
+ok("fallback send records final dedupe", /if \(infoKind === "final" && delivered\?\.visibleReplySent === true\) deliveredFinalTexts\.add\(content\);/.test(src));
+
 ok("final delivery tracked for lifecycle", /let finalDeliverySeen = false;/.test(src) && /if \(info\?\.kind === "final"\) finalDeliverySeen = true;/.test(src));
 ok("active card held until final", /streaming\?\.isActive\(\) === true && !finalDeliverySeen && !terminalQuiet/.test(src));
 ok("cleanup finalizes active card", /onCleanup: \(\) => \{\s*typingCallbacks\?\.onCleanup\?\.\(\);\s*if \(streaming\?\.isActive\(\) === true\)/.test(src) && /cleanup card finalization failed/.test(src));

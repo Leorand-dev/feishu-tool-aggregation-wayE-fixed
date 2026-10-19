@@ -373,12 +373,23 @@
  	const queueStreamingUpdate = (nextText, options) => {
  		if (!nextText) return;
  		if (options?.dedupeWithLastPartial && nextText === lastPartial) return;
-@@ -1688,10 +1947,13 @@
+@@ -1688,10 +1947,24 @@
  			} else streamText = `${snapshotBaseText}${mergeStreamingText(currentSnapshotText, nextText)}`;
  			lastSnapshotTextLength = nextText.length;
  		}
 -		flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
 +		if (streamText.trim()) clearPrewarmStatus();
++		flushCardUpdate();
++	};
++	const queueStreamingBlockUpdate = (nextText) => {
++		if (!nextText) return;
++		// A block payload is cumulative/overlapping text, not an opaque delta.
++		// mergeStreamingText drops shorter prefix copies (the duplicate-card/duplicate-body
++		// symptom) while still appending genuinely new block content.
++		streamText = mergeStreamingText(streamText, nextText);
++		snapshotBaseText = "";
++		lastSnapshotTextLength = nextText.length;
++		lastPartial = nextText;
 +		flushCardUpdate();
  	};
  	const startStreaming = () => {
@@ -388,7 +399,7 @@
  		streamingStartPromise = (async () => {
  			const creds = account.appId && account.appSecret ? {
  				appId: account.appId,
-@@ -1700,7 +1962,8 @@
+@@ -1700,7 +1973,8 @@
  				httpTimeoutMs: resolveConfiguredHttpTimeoutMs(account)
  			} : null;
  			if (!creds) return;
@@ -398,7 +409,7 @@
  			const generation = ++streamingGeneration;
  			streaming = session;
  			activeStreamingGeneration = generation;
-@@ -1715,6 +1978,12 @@
+@@ -1715,6 +1989,12 @@
  					header: cardHeader,
  					note: cardNote
  				});
@@ -411,7 +422,7 @@
  				streamingStartBackoffUntilByAccount.delete(account.accountId);
  			} catch (error) {
  				streamingStartBackoffUntilByAccount.set(account.accountId, Date.now() + STREAMING_START_FAILURE_BACKOFF_MS);
-@@ -1735,11 +2004,46 @@
+@@ -1735,11 +2015,46 @@
  		streamText = "";
  		lastPartial = "";
  		reasoningText = "";
@@ -459,7 +470,7 @@
  	const rememberClosedStreamingSettlement = (generation, content, result, error, disposition = "closed") => {
  		if (generation === void 0 || !content && disposition === "closed") return;
  		closedStreamingSettlements.set(generation, {
-@@ -1750,6 +2054,11 @@
+@@ -1750,6 +2065,11 @@
  		});
  	};
  	const performStreamingClose = async (disposition) => {
@@ -471,7 +482,7 @@
  		const streamingToClose = streaming;
  		const generationToClose = activeStreamingGeneration;
  		const startPromiseToClose = streamingStartPromise;
-@@ -1767,11 +2076,22 @@
+@@ -1767,11 +2087,22 @@
  			let result = noVisibleFeishuReplyDelivery;
  			let finalizationError;
  			if (streamingToClose?.isActive()) {
@@ -497,7 +508,17 @@
  					else {
  						const finalNote = resolveCardNote(agentId, identity, responsePrefixContextProvider());
  						closed = await streamingToClose.closeWithResult(text, { note: finalNote });
-@@ -1853,13 +2173,128 @@
+@@ -1788,7 +2119,8 @@
+ 					kind: "card"
+ 				});
+ 				if (result.visibleReplySent) visibleReplySent = true;
+-				if (disposition === "closed" && result.visibleReplySent && finalizedAnswerText && (finalizationError === void 0 || result.content === text)) deliveredFinalTexts.add(finalizedAnswerText);
++				const deliveredFinalContent = finalizedAnswerText || text;
++				if (disposition === "closed" && result.visibleReplySent && deliveredFinalContent && (finalizationError === void 0 || result.content === text)) deliveredFinalTexts.add(deliveredFinalContent);
+ 				if (finalizationError instanceof FeishuStreamingFinalizationError && result.visibleReplySent) finalizationError = createFeishuPartialReplyDeliveryError(finalizationError.cause ?? finalizationError, result);
+ 			}
+ 			if (disposition === "discarded" || finalizationError !== void 0 || result.visibleReplySent && finalizedAnswerText) rememberClosedStreamingSettlement(generationToClose, finalizedAnswerText, result, finalizationError, disposition);
+@@ -1853,13 +2185,128 @@
  		const outcome = await closeStreaming("discarded");
  		if (outcome.error !== void 0) throw toStringifiedError(outcome.error);
  	};
@@ -632,7 +653,25 @@
  	const sendChunkedTextReply = async (paramsLocal) => {
  		const header = paramsLocal.useCard ? resolveCardHeader(agentId, identity) : void 0;
  		const note = paramsLocal.useCard ? resolveCardNote(agentId, identity, responsePrefixContextProvider()) : void 0;
-@@ -2125,13 +2560,50 @@
+@@ -2003,12 +2450,16 @@
+ 	};
+ 	const ensureVisibleStreamingDelivery = async (result, content, infoKind) => {
+ 		if (result?.visibleReplySent === true || !content?.trim()) return result;
+-		return sendChunkedTextReply({
++		const delivered = await sendChunkedTextReply({
+ 			text: content,
+ 			useCard: withinCardTableLimit(content),
+ 			infoKind,
+ 			preparedPostText: true
+ 		});
++		// A final fallback send must participate in the same dedupe set as a normal
++		// final close, otherwise a later duplicate final payload is resent.
++		if (infoKind === "final" && delivered?.visibleReplySent === true) deliveredFinalTexts.add(content);
++		return delivered;
+ 	};
+ 	function queueIdleSideEffects() {
+ 		idleRequestedForReply = true;
+@@ -2125,13 +2576,50 @@
  				idleRequestedForReply = false;
  				visibleReplySent = false;
  				replyOutcome = void 0;
@@ -686,7 +725,7 @@
  		}
  	};
  	const handleDeliveryError = async (error, info) => {
-@@ -2157,6 +2629,24 @@
+@@ -2157,6 +2645,24 @@
  				};
  			},
  			deliver: async (inputPayload, info) => {
@@ -711,7 +750,7 @@
  				const prepared = await renderFeishuReplyPayload(inputPayload, {
  					to: sendTarget,
  					identity,
-@@ -2184,7 +2674,8 @@
+@@ -2184,7 +2690,8 @@
  					ttsSupplement
  				}));
  				const finalTextExceedsStreamingLimit = info?.kind === "final" && hasText && text.length > textChunkLimit;
@@ -721,7 +760,17 @@
  				const useStaticCard = hasText && cardRenderingRequested && withinCardTableLimit(text);
  				const useStreamingCard = hasText && streamingEnabled && !finalTextExceedsStreamingLimit && (info?.kind === "final" || cardRenderingRequested);
  				const skipTextForDuplicateFinal = !hasIndependentPresentation && info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
-@@ -2254,7 +2745,7 @@
+@@ -2245,16 +2752,13 @@
+ 					const ownerGeneration = activeStreamingGeneration ?? matchingInFlightClose?.generation;
+ 					if (shouldStreamText && ownerGeneration !== void 0 && (streaming?.isActive() || matchingInFlightClose !== void 0)) {
+ 						if (activeStreamingGeneration !== void 0) {
+-							if (info?.kind === "block") queueStreamingUpdate(text, {
+-								mode: "delta",
+-								dedupeWithLastPartial: true
+-							});
++							if (info?.kind === "block") queueStreamingBlockUpdate(text);
+ 							if (info?.kind === "final") {
+ 								streamText = text;
  								hasStreamingFinalText = true;
  								snapshotBaseText = "";
  								lastSnapshotTextLength = text.length;
@@ -730,7 +779,7 @@
  							}
  						}
  						if (hasMedia) try {
-@@ -2309,15 +2800,21 @@
+@@ -2309,15 +2813,21 @@
  				startStreaming();
  				const nextThinking = formatReasoningMessage(payload.text);
  				if (nextThinking) {
@@ -753,7 +802,7 @@
  				const statusLineLocal = formatChannelProgressDraftLineForEntry(account.config, {
  					event: "item",
  					itemKind,
-@@ -2326,9 +2823,37 @@
+@@ -2326,9 +2836,37 @@
  				if (statusLineLocal) return updateStreamingStatusLine(statusLineLocal);
  				return false;
  			} : void 0,
