@@ -1,30 +1,69 @@
-﻿name: verify-patch
+name: verify-patch
 
 on:
+  push:
+  pull_request:
   workflow_dispatch:
 
 jobs:
   verify:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - plugin_version: "2026.10.5"
+            patch: "patches/2026.10.5/feishu-tool-aggregation.patch"
+
+    env:
+      PLUGIN_VERSION: ${{ matrix.plugin_version }}
+      PATCH: ${{ matrix.patch }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Fetch pristine @openclaw/feishu 2026.10.5 bundle
+
+      - name: Resolve expected patched hash from MANIFEST
         run: |
           set -euo pipefail
-          TARBALL=$(npm pack @openclaw/feishu@2026.10.5 --pack-destination "$RUNNER_TEMP" | tail -1)
+          PATCHED_SHA=$(python3 -c "import json; m=json.load(open('patches/MANIFEST.json')); print([v['patched_sha256'] for v in m['versions'] if v['version']=='$PLUGIN_VERSION'][0])")
+          echo "PATCHED_SHA=$PATCHED_SHA" >> "$GITHUB_ENV"
+
+      - name: Fetch pristine @openclaw/feishu bundle
+        run: |
+          set -euo pipefail
+          TARBALL=$(npm pack "@openclaw/feishu@$PLUGIN_VERSION" --pack-destination "$RUNNER_TEMP" | tail -1)
           mkdir -p "$RUNNER_TEMP/pkg"
           tar -xzf "$RUNNER_TEMP/$TARBALL" -C "$RUNNER_TEMP/pkg"
           TARGET=$(find "$RUNNER_TEMP/pkg" -path '*/.setup/monitor.account-*.mjs' | head -1)
           test -n "$TARGET"
           echo "TARGET=$TARGET" >> "$GITHUB_ENV"
-      - name: Apply patch (installer verifies hashes)
+
+      - name: Anchor adapter regression
+        run: |
+          set -euo pipefail
+          python3 tools/adapt_patch.py \
+            --pristine "$TARGET" \
+            --from-patch "$PATCH" \
+            --version "$PLUGIN_VERSION" \
+            --out-dir "$RUNNER_TEMP/adapted" \
+            --expect-sha "$PATCHED_SHA" \
+            --no-manifest
+
+      - name: Apply patch (exact hash + backup/rollback)
         run: |
           set -euo pipefail
           chmod +x install.sh
           ./install.sh "$TARGET"
+
+      - name: Reverse-diff sanity
+        run: |
+          set -euo pipefail
+          patch -R --dry-run -p0 "$TARGET" < "$PATCH"
+
       - name: Run the 2026.10.5 test suites
         run: |
           set -euo pipefail

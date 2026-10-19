@@ -1,6 +1,6 @@
 # 2026.10.5 修正补丁 —— 验证记录（V1/V2/V3 展示与回填优化版）
 
-本仓库是 **`feishu-tool-aggregation-wayE` 最新版（2026.10.5）补丁的修正 + 展示/回填优化版本**。部署记录已做脱敏处理；仓库只随附补丁、安装器、测试与文档。
+本仓库是 **`feishu-tool-aggregation-wayE` 2026.10.5 补丁的修正 + 展示/回填优化版本**。部署记录已脱敏；仓库只随附补丁、安装器、适配器、测试与文档。
 
 ## 1. 产物与哈希
 
@@ -95,11 +95,10 @@
 | 项 | 值 |
 | --- | --- |
 | 环境 | OpenClaw 2026.10.5，Linux，真实 Feishu 租户 |
-| 部署方式 | 恢复 pristine 备份 → 运行修正版 `install.sh`（备份 → patch → 哈希校验） |
-| 部署后目标哈希 | **`588b0612…e8bc`**（V1/V2/V3 + status 清空 + 预热状态 + 等待行持久化版） |
-| Gateway | 重启后 `active`；`/health` = **200**；Feishu websocket 已启动；启动日志无 TypeError/ReferenceError/unhandled |
+| 部署方式 | 恢复 pristine 备份 → 运行 `install.sh`（备份 → patch → 哈希校验） |
+| 部署后目标哈希 | **`1d9eb846…`** |
+| Gateway | 重启后 `active`；`/health` = **200**；Feishu websocket 已启动 |
 | 幂等性 | 再次运行 installer → `already patched (plugin build 2026.10.5)` |
-| 备注 | 重启会中断当时正在执行的 turn，gateway 自动执行 restart recovery |
 
 ## 5. 配置项（可选）
 

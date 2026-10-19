@@ -8,10 +8,10 @@ This is a **new, self-contained** patch set. It supersedes the earlier
 aggregation experiments and packages the final behaviour as one patch against a
 pristine plugin bundle.
 
-> **Repository scope.** This repository ships the **patch files, installer,
-> tests and documentation** only. It does not redistribute the upstream
-> `@openclaw/feishu` bundle. Apply the patch to your own installed 2026.10.5
-> bundle with `install.sh` (or `patch(1)`), then point the tests at that file.
+> **Repository scope.** This repository ships the **patch, installer, tests,
+> anchor adapter and documentation** only. It does not redistribute the
+> upstream `@openclaw/feishu` bundle. Apply the patch to your own installed
+> 2026.10.5 bundle, then point the tests at that file.
 
 ## What it fixes
 
@@ -115,7 +115,7 @@ shape check fell through to a standalone reply. The discriminating signal is
     (`finalToolSummary`, default off). Elapsed refresh is now 15s by default
     and configurable via `toolElapsedRefreshMs`; disabling `showToolElapsed`
     skips the refresh timer entirely.
-13. **Cleanup** — 2026.10.2 leftovers (`markVisibleReplySent`,
+13. **Cleanup** — earlier port leftovers (`markVisibleReplySent`,
     `buildAggregatedToolSummaryLine`, `aggregatedToolSummaryLine`,
     `backfillTotal`, the card/tool backfill block) are removed.
 
@@ -124,19 +124,11 @@ shape check fell through to a standalone reply. The discriminating signal is
 | plugin build | patch file | pristine sha256 | patched sha256 |
 | --- | --- | --- | --- |
 | `@openclaw/feishu` 2026.10.5 | `patches/2026.10.5/feishu-tool-aggregation.patch` | `72a0a198…3bfe` | `1d9eb846…f3e8` |
-| `@openclaw/feishu` 2026.10.2 | `patches/2026.10.2/feishu-tool-aggregation-wayE.patch` | `8ae0e845…5eac` | `97ca5ce4…d867` |
-| `@openclaw/feishu` 2026.10.1 | `patches/2026.10.1/feishu-tool-aggregation-wayE.patch` | `9bbbd0c3…d2d9` | `8cbe577b…4644` |
 
-The 2026.10.5 entry is the **revised** patch: the delivery guard suppresses only
-provable narration (media/MCP/raw-mode tool payloads keep legacy delivery), the
-aggregator owns the card progress line for the duration of a tool batch, the
-idle-hold timer is lifecycle-managed, and tool-only turns close with a visible
-completion line. Its hashes supersede the earlier 2026.10.5 draft.
-
-Each entry targets one exact plugin build. The installer selects the patch by
-matching the target's sha256, so a newer release is a new build: re-derive the
-patch for it (the 2026.10.2 port was re-anchored against that build's streaming
-refactor). A different build is refused rather than mis-applied.
+This repository starts with **one supported initial build**. New builds are not
+silently fuzzy-patched: the installer compares SHA-256 against the known
+pristine/patched hashes and refuses an unknown build. Adding a build means
+re-running the anchor adapter and appending a row + manifest entry.
 
 ## Install
 
@@ -154,12 +146,12 @@ twice reports `already patched`.
 ## Verify
 
 ```sh
-sha256sum -c SHA256SUMS                              # patch files + installer intact
+sha256sum -c SHA256SUMS
 cd tests
-# TARGET is the installed @openclaw/feishu monitor bundle you patched above
-node run-all.mjs "$TARGET"                           # 2026.10.5 suites (recommended)
+# TARGET = the patched bundle (installed path or local patched.mjs)
+node run-all.mjs "$TARGET"
 
-# individual 2026.10.5 suites
+# individual suites
 V="$TARGET"
 node test-wayD-105.mjs $V        # parser / narration guard / media preservation
 node test-wayB-105.mjs $V        # waiting line + aggregation
@@ -167,24 +159,13 @@ node test-wayC-105.mjs $V        # mid-turn block fold + status-line ownership
 node exec-agg-105.mjs $V         # execution harness (deliver decisions)
 node test-idle-release-105.mjs $V  # hold timer / release lifecycle
 node test-narration-ticker-105.mjs $V  # option-B narration ticker
-node test-display-backfill-105.mjs $V  # latest-state backfill + dual status element
+node test-display-backfill-105.mjs $V  # backfill + status element
 node audit-agg-105.mjs $V        # structural audit
-
-# legacy suites validate the earlier ports (2026.10.1 / 2026.10.2)
-# legacy suites validate the earlier ports; apply the 2026.10.2 patch to a copy first
-# and set V102 to that patched bundle
-node test-wayD.mjs "$V102"      # 20
-node test-wayC.mjs "$V102"      # 11
-node test-wayB.mjs "$V102"      # 17
-node exec-agg.mjs  "$V102"      # 23
-node test-idle-release.mjs "$V102"  # 11
-node audit-agg.mjs "$V102"      # 22
 ```
 
-All suites must pass for their target bundle: the `-105` suites and
-`run-all.mjs` verify the 2026.10.5 patch, the legacy suites verify the
-2026.10.1/2026.10.2 patches. They read the bundle path from `argv[2]` (or
-`BUNDLE`), so you can point them at an installed file to audit the live copy.
+`run-all.mjs` runs every 2026.10.5 suite; the suites read the bundle path from
+`argv[2]` (or `BUNDLE`), so you can point them at an installed file to audit the
+live copy. CI runs the same matrix against a freshly fetched npm bundle.
 
 ## Revert
 
@@ -197,7 +178,7 @@ Or reinstall the plugin to restore the pristine bundle.
 
 ## 2026.10.5: waiting-only progress line
 
-The 2026.10.5 port changes what the card shows. Earlier ports folded per-tool
+The 2026.10.5 port changes what the card shows. Earlier implementations folded per-tool
 lines into a summary such as `🛠️ 3 tools: 🛠️ Exec ×3`. That summary is gone; the
 card now carries a compact progress area:
 
@@ -248,6 +229,12 @@ instead of being dropped — content safety comes before "zero bubbles".
 | `hideReasoningInFinal` | `true` | hide thinking from the final card when an answer exists |
 | `finalToolSummary` | `false` | append `> ✅ N 个工具 · 12s` to a mixed final answer |
 
+> **Plugin schema note.** OpenClaw's `openclaw.plugin.json` currently rejects
+> unknown Feishu config keys (`must not have additional properties`). The config
+> table below documents the **code defaults / reserved keys** implemented by this
+> patch; setting them in `channels.feishu` makes the config invalid until a
+> schema adapter is added. Treat them as compiled defaults for now.
+
 ### Requires `verboseLevel: on`
 
 This is the one hard prerequisite. With `verboseLevel: off` tool events never
@@ -261,15 +248,10 @@ openclaw gateway call sessions.patch \
 
 That override is **per session**. New sessions fall back to the default.
 
-### What changed against 2026.10.2
+### Initial 2026.10.5 behavior
 
-| area | 2026.10.2 | 2026.10.5 |
-| --- | --- | --- |
-| card body | `🛠️ N tools: 🛠️ Exec ×3` summary | compact status: `⏳ 已执行 N 个工具 · 最后：Read · 12s` + latest narration |
-| tool summary payloads | one bubble per tool | parsed by label normalisation: bare `Exec` **and** `Read: from …` / `Web Fetch: …` / `Apply Patch` / `Session Settings` are counted; unknown labels keep legacy delivery |
-| narration | suppressed entirely (or leaked as a bubble before the fix) | single rolling ticker line inside the card (latest only, ≤120 chars by default), cleared on final |
-| card/tool race | progress line could be dropped | aggregator writes the waiting line after `session.start()` resolves (no separate backfill block) |
-| idle hold | card kept open indefinitely while a tool summary was pending | 8s window measured from latest tool activity, `hasToolActivity` + `visibleReplySent` guards, `unref()`ed and cancelled/re-armed by activity |
+This repository starts at the 2026.10.5 build. The sections below describe that
+initial behavior; no older plugin builds are shipped.
 
 ### Bare-label payloads
 
@@ -355,55 +337,70 @@ backfill is the correct replacement.
 | 15s timer without `unref` (earlier draft) | `unref?.()`, 8s window, cleared on close/reset/reply start |
 | duplicated `midTurnBlockFold` condition | simplified |
 
-## Upgrade warning
+## Upgrading to a new plugin build
 
-Upgrading OpenClaw or `@openclaw/feishu` rewrites `dist/` and **silently reverts
-this patch**. After any upgrade:
+Upgrading OpenClaw or `@openclaw/feishu` rewrites `dist/` and reverts the patch.
+After an upgrade:
 
 ```sh
 grep -c parseCollapsibleToolSummary ~/.openclaw/npm/projects/*/node_modules/@openclaw/feishu/dist/.setup/monitor.account-*.mjs
 ```
 
-`0` means the patch is gone — re-apply it (and re-derive it if the build hash
-changed).
+`0` means the patch is gone. Fetch/re-derive it for the new build:
+
+1. **Extract the new pristine bundle** (`npm pack @openclaw/feishu@<new>`).
+2. **Run the anchor adapter** against the previous reference patch:
+
+   ```sh
+   python3 tools/adapt_patch.py      --pristine "$NEW_BUNDLE"      --from-patch patches/2026.10.5/feishu-tool-aggregation.patch      --version <new-version>      --out-dir patches/<new-version>      --update-manifest --set-current
+   ```
+
+   It re-locates every hunk by its **full old block** (context + removed
+   lines), requires a unique match, and never uses line numbers or fuzz. If
+   upstream changed a block, it fails loudly; review the diff manually instead
+   of forcing it.
+
+3. **Review/rebase** the generated diff, then:
+   - add the printed install line to `install.sh`;
+   - append the version to `.github/workflows/verify.yml` matrix;
+   - run `python3 tools/verify_patch.py --all` and the full test suite;
+   - canary deploy, check card create/status/close logs, then commit.
+
+The installer always applies only an **exact pristine hash**, creates a backup,
+and verifies the post-patch hash; failure restores the backup. An unknown build
+is refused rather than patched with fuzz.
 
 ## Layout
 
 ```
-README.md                       project overview, install, verify, config
+README.md                       project overview, install, verify, adapter workflow
 VERIFICATION.md                 local verification + sanitized live-test record
 LICENSE                         MIT
-install.sh                      multi-version, idempotent installer
-SHA256SUMS                      patch files + installer hashes
-.github/workflows/verify.yml    CI: syntax-check patches and run tests
+install.sh                      exact-build installer: hash select, backup, rollback
+SHA256SUMS                      patch + installer hashes
+.github/workflows/verify.yml    CI matrix: fetch pristine → adapter check → tests
 patches/
+  MANIFEST.json                 supported version hashes/status (source of truth)
   2026.10.5/
-    feishu-tool-aggregation.patch           the 23-hunk unified diff (current)
-  2026.10.2/
-    feishu-tool-aggregation-wayE.patch      7-hunk legacy diff
-  2026.10.1/
-    feishu-tool-aggregation-wayE.patch      7-hunk legacy diff
+    feishu-tool-aggregation.patch    current initial patch
 tests/
-  run-all.mjs               2026.10.5 suite runner
-  test-wayD-105.mjs         parser / narration guard / media preservation
-  test-wayB-105.mjs         waiting line + aggregation
-  test-wayC-105.mjs         mid-turn block fold + status-line ownership
-  exec-agg-105.mjs          execution harness (deliver decisions)
-  test-idle-release-105.mjs hold timer / release lifecycle
+  run-all.mjs                 suite runner
+  test-wayD-105.mjs           parser / narration guard / media preservation
+  test-wayB-105.mjs           waiting line + aggregation
+  test-wayC-105.mjs           mid-turn block fold + status-line ownership
+  exec-agg-105.mjs            execution harness (deliver decisions)
+  test-idle-release-105.mjs   hold timer / release lifecycle
   test-narration-ticker-105.mjs narration ticker (option B)
   test-display-backfill-105.mjs latest-state backfill + status element
-  audit-agg-105.mjs         structural audit
-  test-wayD.mjs             legacy 2026.10.1/10.2 live-shape discriminator
-  test-wayC.mjs             legacy mid-turn block fold
-  test-wayB.mjs             legacy bounded summary line
-  exec-agg.mjs              legacy execution harness
-  audit-agg.mjs             legacy structural audit
-  test-idle-release.mjs     legacy card-release behaviour
+  audit-agg-105.mjs           structural audit
+tools/
+  adapt_patch.py              anchor-based rebase adapter
+  verify_patch.py             strict patch applier/verifier
 ```
 
-The upstream plugin bundles (`original.mjs` / `patched.mjs`) are **not**
-redistributed here; the installer applies the diff to the locally installed
-`@openclaw/feishu` build and verifies the resulting hash.
+The upstream plugin bundles (`original.mjs` / `patched.mjs`) are not
+redistributed in the GitHub repository; apply the diff to your local installed
+build. The old 2026.10.1/2026.10.2 versions are intentionally not included.
 
 ## License
 
