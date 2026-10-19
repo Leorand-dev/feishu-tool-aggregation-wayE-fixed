@@ -22,7 +22,8 @@ ${deferredStart ? 'streamingStartPromise = new Promise((resolve) => { releaseSta
 let narrationLine = "", waitingLine = "", itemStatusLine = "", compactionLine = "";
 let reasoningText = "", streamText = "";
 const NARRATION_MAX_CHARS = 240;
-const STATUS_MAX_CHARS = 600;
+const STATUS_LINE_MAX_CHARS = 160;
+const STATUS_MAX_CHARS = 400;
 let lastToolActivityAt = 0;
 let timerClears = 0;
 let flushCount = 0;
@@ -112,9 +113,9 @@ return {
   // structural wiring
   ok("deliver routes narration into ticker", /if \(isToolNarrationPayload\(inputPayload, info\)\) \{\s*await deliverNarrationToCard\(inputPayload\.text\);\s*return noVisibleFeishuReplyDelivery;\s*\}/.test(src));
   ok("content renderer excludes narration/status", /const buildCombinedStreamText = \(thinking, answer\) => \[thinking \? formatReasoningPrefix\(thinking\) : "", answer\]\.filter\(Boolean\)\.join\("\\n\\n---\\n\\n"\);/.test(src));
-  ok("status renderer includes narration", /const parts = \[waitingLine, narrationLine, itemStatusLine, compactionLine\]/.test(src));
-  ok("final content clears status/ticker", /if \(info\?\.kind === "final"\) \{\s*renderEpoch \+= 1;\s*clearCardStatusLines\(\);\s*flushCardUpdate\(true\);/.test(src));
-  ok("assistant start clears transient status (keeps tool waiting line)", /onAssistantMessageStart: previewStreamingEnabled \? \(\) => \{\s*renderEpoch \+= 1;\s*if \(aggregatedToolTotal > 0\) clearTransientStatusLines\(\);\s*else clearCardStatusLines\(\);\s*flushCardUpdate\(true\);/.test(src) && /const clearTransientStatusLines = \(\) => \{/.test(src));
+  ok("status renderer includes narration", /const primary = waitingLine \|\| itemStatusLine \|\| compactionLine \|\| narrationLine;/.test(src));
+  ok("final content clears status/ticker", /if \(info\?\.kind === "final"\) \{\s*renderEpoch \+= 1;\s*clearWaitingRefreshTimer\(\);\s*toolPhaseStartedAt = 0;\s*clearCardStatusLines\(\);\s*flushCardUpdate\(true\);/.test(src));
+ok("assistant start keeps initial status when blank", /onAssistantMessageStart: previewStreamingEnabled \? \(\) => \{\s*renderEpoch \+= 1;\s*if \(aggregatedToolTotal > 0\) clearTransientStatusLines\(\);\s*else if \(streamText\.trim\(\) \|\| reasoningText\.trim\(\)\) clearCardStatusLines\(\);\s*else \{[\s\S]{0,400}if \(!prewarmStatusLine && !waitingLine\) \{/.test(src));
   ok("close clears status fields", /const carriedNarration = narrationLine;\s*clearCardStatusLines\(\);/.test(src));
   ok("reset/new reply clear status", /const resetStreamingState = \(\) => \{[\s\S]*?clearCardStatusLines\(\);/.test(src) && /onReplyStart: async \(\) => \{[\s\S]*?clearCardStatusLines\(\);/.test(src));
   ok("dedupe guard exists", /if \(nextLine === narrationLine && streaming\?\.isActive\(\) === true\) return true;/.test(src));

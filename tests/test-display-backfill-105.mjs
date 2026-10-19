@@ -1,5 +1,5 @@
 // 2026.10.5 — latest-state backfill + dual card element / status fallback wiring.
-import { loadBundle, makeCounter } from "./_harness.mjs";
+import { loadBundle, extractArrow, makeCounter } from "./_harness.mjs";
 
 const src = loadBundle();
 const { ok, finish } = makeCounter();
@@ -86,7 +86,7 @@ ok("start latency logged", /streaming card ready in \$\{Date\.now\(\) - cardStar
 ok("backoff reduced to 15s", /STREAMING_START_FAILURE_BACKOFF_MS = 15e3;/.test(src));
 ok("hold window configurable", /cardIdleHoldMs/.test(src));
 ok("progress text overrides configurable", /progressTexts/.test(src));
-ok("status budget configured", /STATUS_MAX_CHARS = 600;/.test(src));
+ok("compact status budget configured", /STATUS_LINE_MAX_CHARS = 160;/.test(src) && /STATUS_MAX_CHARS = 400;/.test(src));
 
 // ---------- 3b) prewarm keeps the card non-blank ----------
 ok("prewarm status requested at reply start", /prewarmRequested = true;\s*startStreaming\(\);/.test(src));
@@ -101,11 +101,43 @@ const statusStart = src.indexOf("const buildStatusText = () => {");
 const statusEnd = src.indexOf("\n\t};", statusStart) + 4;
 const statusFn = new Function(`
 let waitingLine = "waiting"; let narrationLine = "narration"; let itemStatusLine = "item"; let compactionLine = "compact";
-const STATUS_MAX_CHARS = 600;
+const STATUS_LINE_MAX_CHARS = 160;
+const STATUS_MAX_CHARS = 400;
 ${src.slice(truncateStart, src.indexOf("\n\t};", truncateStart) + 4)}
 ${src.slice(statusStart, statusEnd)}
 return buildStatusText;
 `)();
-ok("status order: waiting/narration/item/compaction", statusFn() === "waiting\n\nnarration\n\nitem\n\ncompact", JSON.stringify(statusFn()));
+ok("compact status: waiting + one secondary line", statusFn() === "waiting\nnarration · item · compact", JSON.stringify(statusFn()));
+
+// ---------- 5) display batch 1: compact status, elapsed/last tool, narration cap, timer ----------
+ok("narration max configurable and default 120", /const configured = Number\(account\.config\?\.narrationMaxChars\);\s*return Number\.isFinite\(configured\) && configured >= 40 && configured <= 500 \? configured : 120;/.test(src));
+ok("status lines use single newline", /return truncateDisplayText\(lines\.join\("\\n"\), STATUS_MAX_CHARS\)/.test(src));
+ok("waiting line has last-tool detail", /SHOW_LAST_TOOL_LABEL && lastToolLabel/.test(src) && /const details = \[\];/.test(src));
+ok("waiting line has elapsed detail", /SHOW_TOOL_ELAPSED && toolPhaseStartedAt > 0/.test(src) && /formatElapsedDuration\(elapsedMs\)/.test(src));
+ok("elapsed refresh timer 5s", /TOOL_ELAPSED_REFRESH_MS = 5e3;/.test(src) && /scheduleWaitingRefresh\(\);/.test(src));
+ok("elapsed timer cleared on final/close/reply", (src.match(/clearWaitingRefreshTimer\(\);/g) || []).length >= 4);
+ok("assistant start keeps initial status when blank", /else \{[\s\S]{0,400}if \(!prewarmStatusLine && !waitingLine\) \{\s*prewarmStatusLine = resolveProgressText\("processing"/.test(src));
+{
+  const fmt = extractArrow(src, "formatElapsedDuration");
+  const f = new Function(`${fmt}\nreturn formatElapsedDuration;`)();
+  ok("format elapsed seconds", f(0) === "0s" && f(59_000) === "59s");
+  ok("format elapsed minutes", f(60_000) === "1m00s" && f(125_000) === "2m05s");
+}
+{
+  const fmtBody = extractArrow(src, "formatElapsedDuration");
+  const bwl = extractArrow(src, "buildWaitingLine");
+  const fn = new Function(`
+let waitingLine = "", lastToolLabel = "Read", toolPhaseStartedAt = 0;
+const SHOW_LAST_TOOL_LABEL = true, SHOW_TOOL_ELAPSED = true;
+const resolveProgressText = (key, fallback) => fallback;
+${fmtBody}
+${bwl}
+return { build: buildWaitingLine, start: (ms) => { toolPhaseStartedAt = Date.now() - ms; } };
+`)();
+  ok("waiting line includes last tool", fn.build(3) === "⏳ 已执行 3 个工具 · 最后：Read", fn.build(3));
+  fn.start(12_000);
+  const line = fn.build(3);
+  ok("waiting line includes elapsed", /12s/.test(line) && line.includes("最后：Read"), line);
+}
 
 finish("2026.10.5 display/backfill/session");

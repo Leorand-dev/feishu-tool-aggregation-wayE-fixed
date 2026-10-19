@@ -53,7 +53,7 @@ shape check fell through to a standalone reply. The discriminating signal is
    keep legacy delivery, so real content is never silently swallowed.
 3. **Narration ticker (option B)** — mid-turn narration is shown inside the card
    as a single rolling line (`💬 …`): latest narration only, whitespace collapsed,
-   truncated to 240 chars, refreshed on every narration and cleared when final /
+   truncated to 120 chars by default (`narrationMaxChars`, 40–500), refreshed on every narration and cleared when final /
    assistant text starts. Narration never becomes a standalone bubble.
 4. **Tool-summary parser for real emitter shapes** — accepts bare labels
    (`Exec`, `Bash`) and the actual 2026.10.5 verbose shapes (`Read: from …`,
@@ -61,12 +61,14 @@ shape check fell through to a standalone reply. The discriminating signal is
    lower-cased, spaces/hyphens normalised to underscores, known label aliases
    mapped (`session_settings → sessions`), detail ignored for counting, and the
    text cap raised to 400 chars so normal detail payloads still count.
-5. **Waiting-only progress line (status element)** — the card shows one bounded
-   line `⏳ 已执行 N 个工具，等待中…` in a dedicated markdown status element
-   (`element_id: "status"`), so progress/narration updates do not rewrite the
-   answer content element. Structured status fields (`waitingLine`,
-   `narrationLine`, `itemStatusLine`, `compactionLine`) are combined with a
-   bounded budget.
+5. **Waiting-only progress line (compact status element)** — the card shows a
+   compact status area in a dedicated markdown status element
+   (`element_id: "status"`): a primary line
+   `⏳ 已执行 N 个工具 · 最后：Read · 12s` (last tool + elapsed, refreshed every
+   5s) plus at most one secondary line with the latest narration. Status lines
+   use single `\n` separators, a 160-char cap per line and a 400-char total
+   budget, so progress/narration updates never rewrite the answer content
+   element and never grow into a multi-paragraph block.
 6. **Status-line ownership** — while a tool batch is active, per-item tool /
    command / patch / search / api progress lines and compaction lines do not
    overwrite the waiting line. The waiting line now persists through assistant
@@ -96,10 +98,12 @@ shape check fell through to a standalone reply. The discriminating signal is
     (queued updates render the latest state *after* the card starts, coalesced
     while starting), a dedicated CardKit status element with automatic content
     fallback if the element update is rejected, and structured status
-    priority/budget.
+    priority/budget. The initial status is kept through assistant message starts
+    until the first token/tool/narration, eliminating the second blank window.
 12. **Config, i18n & observability V3** — `cardIdleHoldMs`,
-    `progressTexts` (waiting/completed/compacting strings),
-    `showLastToolLabel`, `cardStatusElement`, `prewarmCard`; 15s start-failure
+    `progressTexts` (waiting/completed/compacting/processing strings),
+    `narrationMaxChars`, `showLastToolLabel`, `showToolElapsed`,
+    `cardStatusElement`, `prewarmCard`; 15s start-failure
     backoff; card-start latency logs; running tool total (no per-event reduce)
     and surrogate-safe truncation.
 13. **Cleanup** — 2026.10.2 leftovers (`markVisibleReplySent`,
@@ -110,7 +114,7 @@ shape check fell through to a standalone reply. The discriminating signal is
 
 | plugin build | patch file | pristine sha256 | patched sha256 |
 | --- | --- | --- | --- |
-| `@openclaw/feishu` 2026.10.5 | `patches/2026.10.5/feishu-tool-aggregation.patch` | `72a0a198…3bfe` | `588b0612…e8bc` |
+| `@openclaw/feishu` 2026.10.5 | `patches/2026.10.5/feishu-tool-aggregation.patch` | `72a0a198…3bfe` | `ba5e6b23…bc8d` |
 | `@openclaw/feishu` 2026.10.2 | `patches/2026.10.2/feishu-tool-aggregation-wayE.patch` | `8ae0e845…5eac` | `97ca5ce4…d867` |
 | `@openclaw/feishu` 2026.10.1 | `patches/2026.10.1/feishu-tool-aggregation-wayE.patch` | `9bbbd0c3…d2d9` | `8cbe577b…4644` |
 
@@ -157,6 +161,7 @@ node test-narration-ticker-105.mjs $V  # option-B narration ticker
 node test-display-backfill-105.mjs $V  # latest-state backfill + dual status element
 node audit-agg-105.mjs $V        # structural audit
 
+# legacy suites validate the earlier ports (2026.10.1 / 2026.10.2)
 # legacy suites validate the earlier ports; apply the 2026.10.2 patch to a copy first
 # and set V102 to that patched bundle
 node test-wayD.mjs "$V102"      # 20
@@ -185,17 +190,22 @@ Or reinstall the plugin to restore the pristine bundle.
 
 The 2026.10.5 port changes what the card shows. Earlier ports folded per-tool
 lines into a summary such as `🛠️ 3 tools: 🛠️ Exec ×3`. That summary is gone; the
-card now carries a single bounded progress line:
+card now carries a compact progress area:
 
 ```
-⏳ 已执行 3 个工具，等待中…
+⏳ 已执行 3 个工具 · 最后：Read · 12s
+💬 正在检查配置…
 ```
+
+The first line is the waiting line (with last tool and elapsed time when
+enabled); the second line is the latest narration. Both are capped so they
+stay close to two visual lines instead of growing into paragraphs.
 
 Mid-turn narration (`💬 …`) is displayed inside the same card as a single
 rolling ticker line: only the latest narration is kept (whitespace collapsed,
-truncated to 240 chars), each new narration replaces the previous one, and the
-line is cleared as soon as the assistant answer starts streaming or a final
-payload arrives. Narration never becomes a standalone bubble. Feishu cards have
+truncated to 120 chars by default), each new narration replaces the previous
+one, and the line is cleared as soon as the assistant answer starts streaming
+or a final payload arrives. Narration never becomes a standalone bubble. Feishu cards have
 no native scroll container, so this is a content-refresh ticker rather than an
 animated scrollbar.
 
@@ -215,11 +225,14 @@ instead of being dropped — content safety comes before "zero bubbles".
 | `prewarmCard` | `true` | start the streaming card at reply start (when preview streaming is on) |
 | `cardStatusElement` | `true` | use a dedicated CardKit `status` element; `false` merges status into content |
 | `cardIdleHoldMs` | `8000` | tool-batch hold window (2–30s) |
-| `progressTexts.toolWaiting` | `⏳ 已执行 {count} 个工具，等待中…` | waiting line template |
+| `progressTexts.toolWaiting` | `⏳ 已执行 {count} 个工具` | waiting line template |
 | `progressTexts.toolCompleted` | `✅ 已执行 {count} 个工具` | tool-only completion line |
 | `progressTexts.compacting` | `📦 **Compacting context...**` | compaction line |
+| `showLastToolLabel` | `true` | append `（最后：Read）`-style detail to the waiting line |
+| `showToolElapsed` | `true` | append elapsed seconds (e.g. `12s`) to the waiting line; refreshed every 5s |
+| `narrationMaxChars` | `120` | max code points for the narration ticker (40–500) |
+| `progressTexts.processing` | `✍️ 正在生成回复…` | fallback status when assistant starts before first token/tool |
 | `progressTexts.prewarm` | `⏳ 已收到，正在处理…` | initial status on a prewarmed blank card |
-| `showLastToolLabel` | `false` | append `（最后：Read）` to the waiting line |
 
 ### Requires `verboseLevel: on`
 
@@ -238,9 +251,9 @@ That override is **per session**. New sessions fall back to the default.
 
 | area | 2026.10.2 | 2026.10.5 |
 | --- | --- | --- |
-| card body | `🛠️ N tools: 🛠️ Exec ×3` summary | `⏳ 已执行 N 个工具，等待中…` |
+| card body | `🛠️ N tools: 🛠️ Exec ×3` summary | compact status: `⏳ 已执行 N 个工具 · 最后：Read · 12s` + latest narration |
 | tool summary payloads | one bubble per tool | parsed by label normalisation: bare `Exec` **and** `Read: from …` / `Web Fetch: …` / `Apply Patch` / `Session Settings` are counted; unknown labels keep legacy delivery |
-| narration | suppressed entirely (or leaked as a bubble before the fix) | single rolling ticker line inside the card (latest only, ≤240 chars), cleared on final |
+| narration | suppressed entirely (or leaked as a bubble before the fix) | single rolling ticker line inside the card (latest only, ≤120 chars by default), cleared on final |
 | card/tool race | progress line could be dropped | aggregator writes the waiting line after `session.start()` resolves (no separate backfill block) |
 | idle hold | card kept open indefinitely while a tool summary was pending | 8s window measured from latest tool activity, `hasToolActivity` + `visibleReplySent` guards, `unref()`ed and cancelled/re-armed by activity |
 

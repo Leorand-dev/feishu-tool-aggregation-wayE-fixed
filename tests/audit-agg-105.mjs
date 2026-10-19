@@ -30,7 +30,7 @@ ok("blanket kind:tool drop removed", !/if \(info\?\.kind === "tool" && inputPayl
 ok("structured display state exists", ["waitingLine", "itemStatusLine", "compactionLine", "narrationLine", "lastToolLabel"].every((v) => src.includes(`let ${v} = "";`)));
 ok("running total counter exists", /let aggregatedToolTotal = 0;/.test(src) && /aggregatedToolTotal \+= 1;/.test(src));
 ok("no per-event reduce over counts", !src.includes("Array.from(aggregatedToolSummaryCounts.values()).reduce"));
-ok("status renderer combines fields", /const parts = \[waitingLine, narrationLine, itemStatusLine, compactionLine\]/.test(src));
+ok("status renderer combines fields", /const primary = waitingLine \|\| itemStatusLine \|\| compactionLine \|\| narrationLine;/.test(src) && /const secondary = extras\.length > 0/.test(src));
 ok("content renderer separated from status", /const body = buildCombinedStreamText\(reasoningText, streamText\);/.test(src) && /const statusFallback = !statusElementEnabled \|\| streaming\?\.isStatusUnavailable\?\.\(\) === true \? buildStatusText\(\) : "";/.test(src));
 ok("flush uses latest-state providers", /content: \(\) => renderCardContent\(\),\s*status: \(\) => buildStatusText\(\),/.test(src));
 ok("card-start pending flush is coalesced", /cardFlushPending/.test(src) && /if \(!active && cardFlushPending && !force\) return;/.test(src));
@@ -55,8 +55,8 @@ ok("status updates throttled", /statusLastUpdateTime/.test(src) && /schedulePend
 ok("waiting template uses progressTexts", /resolveProgressText\("toolWaiting"/.test(src));
 ok("completed template uses progressTexts", /resolveProgressText\("toolCompleted"/.test(src));
 ok("compacting template uses progressTexts", /resolveProgressText\("compacting"/.test(src));
-ok("optional last-tool label", /showLastToolLabel === true && lastToolLabel/.test(src));
-ok("status budget present", /const STATUS_MAX_CHARS = 600;/.test(src));
+ok("optional last-tool label", /SHOW_LAST_TOOL_LABEL && lastToolLabel/.test(src));
+ok("compact status budget present", /const STATUS_LINE_MAX_CHARS = 160;/.test(src) && /const STATUS_MAX_CHARS = 400;/.test(src));
 
 // --- V3: backoff / hold config / observability ---
 ok("streaming start backoff reduced", /STREAMING_START_FAILURE_BACKOFF_MS = 15e3;/.test(src));
@@ -65,14 +65,15 @@ ok("card start latency logged", /streaming card ready in \$\{Date\.now\(\) - car
 ok("status element can be disabled by config", /cardStatusElement !== false/.test(src));
 
 // --- preserved 2026.10.5 features ---
-ok("waiting string intact", src.includes("\\u23F3 \\u5df2\\u6267\\u884c {count} \\u4e2a\\u5de5\\u5177\\uff0c\\u7b49\\u5f85\\u4e2d\\u2026"));
+ok("waiting string intact", src.includes("\\u23F3 \\u5df2\\u6267\\u884c {count} \\u4e2a\\u5de5\\u5177") && src.includes("\\uff0c\\u7b49\\u5f85\\u4e2d\\u2026"));
+ok("waiting line shows last tool / elapsed", /SHOW_LAST_TOOL_LABEL && lastToolLabel/.test(src) && /SHOW_TOOL_ELAPSED && toolPhaseStartedAt > 0/.test(src) && /TOOL_ELAPSED_REFRESH_MS = 5e3;/.test(src));
 ok("completed string intact", src.includes("\\u2705 \\u5df2\\u6267\\u884c {count} \\u4e2a\\u5de5\\u5177"));
 ok("bare-label whitelist intact", src.includes("const BARE_TOOL_LABELS = "));
 ok("mid-turn block fold intact", count(src, "const midTurnBlockFold =") === 1);
 ok("counts cleared on reset", /const resetStreamingState = \(\) => \{[\s\S]*?aggregatedToolSummaryCounts\.clear\(\);/.test(src));
 ok("counts cleared on reply start", /onReplyStart: async \(\) => \{[\s\S]*?aggregatedToolSummaryCounts\.clear\(\);/.test(src));
 ok("failed outcome releases hold", /replyOutcome\?\.kind === "failed"/.test(src));
-ok("waiting line persists across assistant starts", /if \(aggregatedToolTotal > 0\) clearTransientStatusLines\(\);\s*else clearCardStatusLines\(\);/.test(src));
+ok("waiting line persists across assistant starts", /if \(aggregatedToolTotal > 0\) clearTransientStatusLines\(\);\s*else if \(streamText\.trim\(\) \|\| reasoningText\.trim\(\)\) clearCardStatusLines\(\);/.test(src));
 ok("transient clear keeps waiting line", /const clearTransientStatusLines = \(\) => \{\s*itemStatusLine = "";\s*compactionLine = "";\s*narrationLine = "";/.test(src));
 ok("idle hold uses running total", /const hasToolActivity = aggregatedToolTotal > 0;/.test(src));
 ok("timer lifecycle preserved", /const clearIdleCloseTimer = \(\) => \{/.test(src) && /idleCloseTimer\.unref\?\.\(\);/.test(src) && /!visibleReplySent && !terminalQuiet/.test(src));
@@ -95,6 +96,9 @@ for (const symbol of [
   "updateWaitingLine",
   "clearCardStatusLines",
   "clearTransientStatusLines",
+  "formatElapsedDuration",
+  "clearWaitingRefreshTimer",
+  "scheduleWaitingRefresh",
   "truncateDisplayText",
 ]) {
   const declarations = count(src, `const ${symbol} = `);

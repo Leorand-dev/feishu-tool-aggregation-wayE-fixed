@@ -6,8 +6,8 @@
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `patches/2026.10.5/feishu-tool-aggregation.patch` | `e7e1f775d904ede8b11dc37e66e379999b081470d21b77b16f6f72041812a4ec` |
-| `patches/2026.10.5/patched.mjs` | `588b061245a95a28ff8f1ec9f12c9459a5899cfa62810de9675e1cfd4caae8bc` |
+| `patches/2026.10.5/feishu-tool-aggregation.patch` | `1ee0881b7d40652462a95981945ce46f349ce19cf06a792c76e52b41a82c23b9` |
+| `patches/2026.10.5/patched.mjs` | `ba5e6b2304d3857b5dcad0cedf04231792439ece132d5a490f8c260d85a3bc8d` |
 | `patches/2026.10.5/original.mjs`（未改动） | `72a0a198e31e71e4690e2b86296d53983863e99e8d3a0872ac4cbb83aefe3bfe` |
 
 - 补丁：**23 hunks**，`original.mjs` + patch → `patched.mjs` 正/反向 **byte-exact**，offset 全 +0。
@@ -22,6 +22,7 @@
 | **提前开卡** | `onReplyStart` 在 preview streaming 开启时预热卡片（`prewarmCard` 可关）；卡片创建与工具执行重叠，消除 1–2s 空窗 |
 | **预热状态** | 卡片 ready 后立即显示 `⏳ 已收到，正在处理…`（`progressTexts.prewarm`），首个工具/旁白/正文出现时自动清除，避免空白预热卡 |
 | **等待行持久化** | `⏳ 已执行 N 个工具…` 在助手分段/中间文本开始时不再被清空（只清 item/compaction/narration 临时行），持续显示并随工具计数更新，仅在 final/关闭时移除 |
+| **展示打磨 batch 1** | 初始化/处理状态跨 assistant start 保留，消除第二段空白；状态区紧凑为“主行 + 至多一行旁白”；等待行增加最后工具与耗时（5s 刷新）；旁白上限可配，默认 120 字 |
 | **最新态回填** | `flushCardUpdate` 向队列传 render provider，队列在 `await streamingStartPromise` 之后渲染**最新**展示状态；卡片创建期间更新合并为一次 pending flush（`cardFlushPending`），不再重放旧帧 |
 | **ticker 打磨** | 相同旁白去重、`truncateDisplayText` 按 code point 截断（修复代理对截断），max chars 可配 |
 | **进度计数** | 引入 `aggregatedToolTotal` 运行总数，去掉每个工具事件的全 map `reduce` |
@@ -67,9 +68,9 @@
 33 passed, 0 failed (2026.10.5 execution harness)
 26 passed, 0 failed (2026.10.5 idle/timer/content)
 32 passed, 0 failed (2026.10.5 narration ticker)
-31 passed, 0 failed (2026.10.5 display/backfill/session)
-75 passed, 0 failed (2026.10.5 structural audit)
-8/8 suites passed, 0 failed — 303 assertions
+42 passed, 0 failed (2026.10.5 display/backfill/session)
+79 passed, 0 failed (2026.10.5 structural audit)
+8/8 suites passed, 0 failed — 318 assertions
 ```
 
 新增 `test-display-backfill-105.mjs` 覆盖：

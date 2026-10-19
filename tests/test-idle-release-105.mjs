@@ -125,7 +125,7 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
   ok("performStreamingClose clears hold timer", /const performStreamingClose = async[\s\S]{0,120}clearIdleCloseTimer\(\);/.test(src));
   ok("resetStreamingState clears timer", /const resetStreamingState = \(\) => \{[\s\S]*?clearIdleCloseTimer\(\);[\s\S]*?lastToolActivityAt = 0;/.test(src));
   ok("onReplyStart clears timer", /onReplyStart: async \(\) => \{[\s\S]*?clearIdleCloseTimer\(\);[\s\S]*?lastToolActivityAt = 0;/.test(src));
-  ok("aggregator clears pending timer", /aggregatedToolTotal \+= 1;[\s\S]{0,160}clearIdleCloseTimer\(\);/.test(src));
+  ok("aggregator clears pending timer", /aggregatedToolTotal \+= 1;[\s\S]{0,320}clearIdleCloseTimer\(\);/.test(src));
 
   // 9) terminal card content for tool-only turns
   const bc = extractArrow(src, "buildCombinedStreamText");

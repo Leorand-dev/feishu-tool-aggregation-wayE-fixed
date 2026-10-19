@@ -168,7 +168,7 @@
  const NO_VISIBLE_REPLY_FALLBACK_TEXT = "⚠️ This reply completed without visible content. The turn may have been interrupted; please retry or ask me to recover from recent context.";
  function isStreamingStartBackedOff(accountId, now = Date.now()) {
  	const backoffUntil = streamingStartBackoffUntilByAccount.get(accountId);
-@@ -1638,7 +1740,28 @@
+@@ -1638,7 +1740,37 @@
  	let streamText = "";
  	let lastPartial = "";
  	let reasoningText = "";
@@ -183,8 +183,17 @@
 +	let prewarmStatusLine = "";
 +	let renderEpoch = 0;
 +	let cardFlushPending = false;
-+	const NARRATION_MAX_CHARS = 240;
-+	const STATUS_MAX_CHARS = 600;
++	const NARRATION_MAX_CHARS = (() => {
++		const configured = Number(account.config?.narrationMaxChars);
++		return Number.isFinite(configured) && configured >= 40 && configured <= 500 ? configured : 120;
++	})();
++	const STATUS_LINE_MAX_CHARS = 160;
++	const STATUS_MAX_CHARS = 400;
++	const SHOW_LAST_TOOL_LABEL = account.config?.showLastToolLabel !== false;
++	const SHOW_TOOL_ELAPSED = account.config?.showToolElapsed !== false;
++	const TOOL_ELAPSED_REFRESH_MS = 5e3;
++	let toolPhaseStartedAt = 0;
++	let waitingRefreshTimer;
 +	let lastToolActivityAt = 0;
 +	let idleCloseTimer;
 +	// Gap allowed between tool batches before the card is closed; keeps one card per
@@ -198,7 +207,7 @@
  	let snapshotBaseText = "";
  	let lastSnapshotTextLength = 0;
  	let hasStreamingFinalText = false;
-@@ -1661,20 +1784,95 @@
+@@ -1661,20 +1793,129 @@
  		if (!thinking) return "";
  		return `> 💭 **Thinking**\n${thinking.replace(/^(?:Reasoning:|Thinking\.{0,3})\s*/u, "").replace(/^_(.*)_$/gm, "$1").split("\n").map((line) => `> ${line}`).join("\n")}`;
  	};
@@ -217,11 +226,22 @@
 +		return typeof configured === "string" && configured.trim() ? configured : fallback;
 +	};
 +	const buildCombinedStreamText = (thinking, answer) => [thinking ? formatReasoningPrefix(thinking) : "", answer].filter(Boolean).join("\n\n---\n\n");
++	const formatElapsedDuration = (elapsedMs) => {
++		const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1e3));
++		if (totalSeconds < 60) return `${totalSeconds}s`;
++		return `${Math.floor(totalSeconds / 60)}m${String(totalSeconds % 60).padStart(2, "0")}s`;
++	};
 +	const buildWaitingLine = (total) => {
-+		const template = resolveProgressText("toolWaiting", "\u23F3 \u5df2\u6267\u884c {count} \u4e2a\u5de5\u5177\uff0c\u7b49\u5f85\u4e2d\u2026");
++		const template = resolveProgressText("toolWaiting", "\u23F3 \u5df2\u6267\u884c {count} \u4e2a\u5de5\u5177");
 +		const base = template.split("{count}").join(String(total));
-+		if (account.config?.showLastToolLabel === true && lastToolLabel) return `${base}\uff08\u6700\u540e\uff1a${lastToolLabel}\uff09`;
-+		return base;
++		const details = [];
++		if (SHOW_LAST_TOOL_LABEL && lastToolLabel) details.push(`\u6700\u540e\uff1a${lastToolLabel}`);
++		if (SHOW_TOOL_ELAPSED && toolPhaseStartedAt > 0) {
++			const elapsedMs = Date.now() - toolPhaseStartedAt;
++			if (elapsedMs >= 1e3) details.push(formatElapsedDuration(elapsedMs));
++		}
++		if (details.length > 0) return `${base} \u00b7 ${details.join(" \u00b7 ")}`;
++		return `${base}\uff0c\u7b49\u5f85\u4e2d\u2026`;
 +	};
 +	const buildCompletedLine = (total) => {
 +		const template = resolveProgressText("toolCompleted", "\u2705 \u5df2\u6267\u884c {count} \u4e2a\u5de5\u5177");
@@ -229,9 +249,15 @@
 +	};
 +	const buildCompactingLine = () => resolveProgressText("compacting", "\u{1F4E6} **Compacting context...**");
 +	const buildStatusText = () => {
-+		const parts = [waitingLine, narrationLine, itemStatusLine, compactionLine].filter(Boolean);
-+		if (parts.length === 0) return "";
-+		return truncateDisplayText(parts.join("\n\n"), STATUS_MAX_CHARS);
++		const primary = waitingLine || itemStatusLine || compactionLine || narrationLine;
++		if (!primary) return "";
++		const extras = [];
++		if (narrationLine && narrationLine !== primary) extras.push(narrationLine);
++		if (itemStatusLine && itemStatusLine !== primary) extras.push(itemStatusLine);
++		if (compactionLine && compactionLine !== primary) extras.push(compactionLine);
++		const secondary = extras.length > 0 ? truncateDisplayText(extras.join(" \u00b7 "), STATUS_LINE_MAX_CHARS) : "";
++		const lines = [truncateDisplayText(primary, STATUS_LINE_MAX_CHARS), secondary].filter(Boolean);
++		return truncateDisplayText(lines.join("\n"), STATUS_MAX_CHARS);
 +	};
 +	const renderCardContent = () => {
 +		const body = buildCombinedStreamText(reasoningText, streamText);
@@ -261,6 +287,23 @@
 +		partialUpdateQueue = queued.finally(() => {
 +			cardFlushPending = false;
 +		});
++	};
++	const clearWaitingRefreshTimer = () => {
++		if (waitingRefreshTimer !== void 0) {
++			clearTimeout(waitingRefreshTimer);
++			waitingRefreshTimer = void 0;
++		}
++	};
++	const scheduleWaitingRefresh = () => {
++		if (waitingRefreshTimer !== void 0 || aggregatedToolTotal === 0) return;
++		waitingRefreshTimer = setTimeout(() => {
++			waitingRefreshTimer = void 0;
++			if (aggregatedToolTotal === 0 || streaming?.isActive() !== true) return;
++			waitingLine = buildWaitingLine(aggregatedToolTotal);
++			flushCardUpdate();
++			scheduleWaitingRefresh();
++		}, TOOL_ELAPSED_REFRESH_MS);
++		waitingRefreshTimer.unref?.();
 +	};
 +	const clearPrewarmStatus = () => {
 +		if (!prewarmStatusLine) return;
@@ -301,7 +344,7 @@
  	const queueStreamingUpdate = (nextText, options) => {
  		if (!nextText) return;
  		if (options?.dedupeWithLastPartial && nextText === lastPartial) return;
-@@ -1688,10 +1886,13 @@
+@@ -1688,10 +1929,13 @@
  			} else streamText = `${snapshotBaseText}${mergeStreamingText(currentSnapshotText, nextText)}`;
  			lastSnapshotTextLength = nextText.length;
  		}
@@ -316,7 +359,7 @@
  		streamingStartPromise = (async () => {
  			const creds = account.appId && account.appSecret ? {
  				appId: account.appId,
-@@ -1700,7 +1901,8 @@
+@@ -1700,7 +1944,8 @@
  				httpTimeoutMs: resolveConfiguredHttpTimeoutMs(account)
  			} : null;
  			if (!creds) return;
@@ -326,7 +369,7 @@
  			const generation = ++streamingGeneration;
  			streaming = session;
  			activeStreamingGeneration = generation;
-@@ -1715,6 +1917,12 @@
+@@ -1715,6 +1960,12 @@
  					header: cardHeader,
  					note: cardNote
  				});
@@ -339,7 +382,7 @@
  				streamingStartBackoffUntilByAccount.delete(account.accountId);
  			} catch (error) {
  				streamingStartBackoffUntilByAccount.set(account.accountId, Date.now() + STREAMING_START_FAILURE_BACKOFF_MS);
-@@ -1735,11 +1943,43 @@
+@@ -1735,11 +1986,45 @@
  		streamText = "";
  		lastPartial = "";
  		reasoningText = "";
@@ -352,6 +395,8 @@
 +		prewarmRequested = false;
 +		prewarmStatusLine = "";
 +		cardFlushPending = false;
++		clearWaitingRefreshTimer();
++		toolPhaseStartedAt = 0;
 +		clearIdleCloseTimer();
 +		lastToolActivityAt = 0;
  		snapshotBaseText = "";
@@ -384,16 +429,18 @@
  	const rememberClosedStreamingSettlement = (generation, content, result, error, disposition = "closed") => {
  		if (generation === void 0 || !content && disposition === "closed") return;
  		closedStreamingSettlements.set(generation, {
-@@ -1750,6 +1990,8 @@
+@@ -1750,6 +2035,10 @@
  		});
  	};
  	const performStreamingClose = async (disposition) => {
 +		renderEpoch += 1;
 +		clearIdleCloseTimer();
++		clearWaitingRefreshTimer();
++		toolPhaseStartedAt = 0;
  		const streamingToClose = streaming;
  		const generationToClose = activeStreamingGeneration;
  		const startPromiseToClose = streamingStartPromise;
-@@ -1767,11 +2009,17 @@
+@@ -1767,11 +2056,17 @@
  			let result = noVisibleFeishuReplyDelivery;
  			let finalizationError;
  			if (streamingToClose?.isActive()) {
@@ -414,7 +461,7 @@
  					else {
  						const finalNote = resolveCardNote(agentId, identity, responsePrefixContextProvider());
  						closed = await streamingToClose.closeWithResult(text, { note: finalNote });
-@@ -1853,13 +2101,124 @@
+@@ -1853,13 +2148,128 @@
  		const outcome = await closeStreaming("discarded");
  		if (outcome.error !== void 0) throw toStringifiedError(outcome.error);
  	};
@@ -534,6 +581,10 @@
 +		});
 +		aggregatedToolTotal += 1;
 +		lastToolLabel = entry.label;
++		if (aggregatedToolTotal === 1) {
++			toolPhaseStartedAt = Date.now();
++			scheduleWaitingRefresh();
++		}
 +		lastToolActivityAt = Date.now();
 +		clearIdleCloseTimer();
 +		// If the card was cleared while starting (final/assistant start), count the tool but
@@ -545,12 +596,10 @@
  	const sendChunkedTextReply = async (paramsLocal) => {
  		const header = paramsLocal.useCard ? resolveCardHeader(agentId, identity) : void 0;
  		const note = paramsLocal.useCard ? resolveCardNote(agentId, identity, responsePrefixContextProvider()) : void 0;
-@@ -2125,11 +2484,36 @@
+@@ -2125,11 +2535,38 @@
  				idleRequestedForReply = false;
  				visibleReplySent = false;
  				replyOutcome = void 0;
--			}
--			if (previewStreamingEnabled && renderMode === "card") startStreaming();
 +				aggregatedToolSummaryCounts.clear();
 +				aggregatedToolTotal = 0;
 +				lastToolLabel = "";
@@ -558,10 +607,13 @@
 +				prewarmStatusLine = "";
 +				cardFlushPending = false;
 +				clearCardStatusLines();
++				clearWaitingRefreshTimer();
++				toolPhaseStartedAt = 0;
 +				clearIdleCloseTimer();
 +				lastToolActivityAt = 0;
 +				renderEpoch += 1;
-+			}
+ 			}
+-			if (previewStreamingEnabled && renderMode === "card") startStreaming();
 +			if (previewStreamingEnabled && renderMode !== "raw" && account.config?.prewarmCard !== false) {
 +				prewarmRequested = true;
 +				startStreaming();
@@ -585,7 +637,7 @@
  		onCleanup: () => {
  			typingCallbacks?.onCleanup?.();
  		}
-@@ -2157,6 +2541,22 @@
+@@ -2157,6 +2594,24 @@
  				};
  			},
  			deliver: async (inputPayload, info) => {
@@ -602,13 +654,15 @@
 +				// Final content supersedes the transient narration ticker.
 +				if (info?.kind === "final") {
 +					renderEpoch += 1;
++					clearWaitingRefreshTimer();
++					toolPhaseStartedAt = 0;
 +					clearCardStatusLines();
 +					flushCardUpdate(true);
 +				}
  				const prepared = await renderFeishuReplyPayload(inputPayload, {
  					to: sendTarget,
  					identity,
-@@ -2184,7 +2584,8 @@
+@@ -2184,7 +2639,8 @@
  					ttsSupplement
  				}));
  				const finalTextExceedsStreamingLimit = info?.kind === "final" && hasText && text.length > textChunkLimit;
@@ -618,7 +672,7 @@
  				const useStaticCard = hasText && cardRenderingRequested && withinCardTableLimit(text);
  				const useStreamingCard = hasText && streamingEnabled && !finalTextExceedsStreamingLimit && (info?.kind === "final" || cardRenderingRequested);
  				const skipTextForDuplicateFinal = !hasIndependentPresentation && info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
-@@ -2254,7 +2655,7 @@
+@@ -2254,7 +2710,7 @@
  								hasStreamingFinalText = true;
  								snapshotBaseText = "";
  								lastSnapshotTextLength = text.length;
@@ -627,7 +681,7 @@
  							}
  						}
  						if (hasMedia) try {
-@@ -2309,15 +2710,21 @@
+@@ -2309,15 +2765,21 @@
  				startStreaming();
  				const nextThinking = formatReasoningMessage(payload.text);
  				if (nextThinking) {
@@ -650,7 +704,7 @@
  				const statusLineLocal = formatChannelProgressDraftLineForEntry(account.config, {
  					event: "item",
  					itemKind,
-@@ -2326,9 +2733,26 @@
+@@ -2326,9 +2788,37 @@
  				if (statusLineLocal) return updateStreamingStatusLine(statusLineLocal);
  				return false;
  			} : void 0,
@@ -660,7 +714,18 @@
 +			onAssistantMessageStart: previewStreamingEnabled ? () => {
 +				renderEpoch += 1;
 +				if (aggregatedToolTotal > 0) clearTransientStatusLines();
-+				else clearCardStatusLines();
++				else if (streamText.trim() || reasoningText.trim()) clearCardStatusLines();
++				else {
++					// No assistant content yet: drop transient item/narration lines but keep
++					// the initial "processing" status until the first token/tool arrives.
++					itemStatusLine = "";
++					compactionLine = "";
++					narrationLine = "";
++					if (!prewarmStatusLine && !waitingLine) {
++						prewarmStatusLine = resolveProgressText("processing", "\u270D\uFE0F \u6b63\u5728\u751f\u6210\u56de\u590d\u2026");
++						waitingLine = prewarmStatusLine;
++					}
++				}
 +				flushCardUpdate(true);
 +				return false;
 +			} : void 0,

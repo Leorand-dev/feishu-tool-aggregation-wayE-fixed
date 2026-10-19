@@ -12,6 +12,8 @@ let sessionActive = true;
 let renderEpoch = 0;
 let aggregatedToolTotal = 0;
 let lastToolLabel = "";
+let toolPhaseStartedAt = 0;
+const scheduleWaitingRefresh = () => {};
 let lastToolActivityAt = 0;
 let timerClears = 0;
 const aggregatedToolSummaryCounts = new Map();
@@ -81,7 +83,7 @@ const e2 = { key: "k2", icon: "🛠️", label: "read" };
   ok("waiting line is not resurrected after clear", race.waitingLines.length === 0, JSON.stringify(race.waitingLines));
 
   // structural invariants
-  ok("waiting template present", src.includes('resolveProgressText("toolWaiting", "\\u23F3 \\u5df2\\u6267\\u884c {count} \\u4e2a\\u5de5\\u5177\\uff0c\\u7b49\\u5f85\\u4e2d\\u2026")'));
+ok("waiting template present", src.includes('resolveProgressText("toolWaiting", "\\u23F3 \\u5df2\\u6267\\u884c {count} \\u4e2a\\u5de5\\u5177")') && src.includes("const details = [];"));
   ok("running total replaces reduce", !src.includes("Array.from(aggregatedToolSummaryCounts.values()).reduce") && src.includes("aggregatedToolTotal += 1;"));
   ok("waiting line uses running total", src.includes("updateWaitingLine(buildWaitingLine(aggregatedToolTotal));"));
   ok("no dead summary builder", !src.includes("buildAggregatedToolSummaryLine"));
