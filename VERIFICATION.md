@@ -83,12 +83,9 @@
 
 其他套件覆盖：真实 emitter 解析、叙述/媒体兜底、等待行/运行总数/epoch 竞态、状态行归属、hold 生命周期、旁白 ticker（去重/安全截断/竞态/清空）、结构审计。
 
-### 3.3 旧版基线（未改动的 10.1/10.2 补丁）
+### 3.3 版本策略
 
-| 版本 | 套件 | 断言 |
-| --- | --- | --- |
-| 2026.10.2 | 6/6 通过 | 104 条 |
-| 2026.10.1 | 6/6 通过 | 104 条 |
+仓库只保留 **2026.10.5 作为初始版本**；旧版本补丁/测试已移出仓库（本地归档），不再随仓库分发。未来版本通过锚点适配器、`patches/MANIFEST.json` 和 CI 矩阵追加。
 
 ## 4. 参考部署记录（已脱敏）
 
@@ -126,24 +123,23 @@
 
 ```
 fixed/
+  README.md                    项目说明 / 安装 / 适配流程
+  VERIFICATION.md              本文件
+  install.sh                   单版本精确哈希安装器（备份 + 回滚）
   patches/
-    2026.10.1/ 2026.10.2/       未改动的基线补丁与 bundle
+    MANIFEST.json              版本哈希/状态清单
     2026.10.5/
-      original.mjs               pristine（npm 官方制品）
-      patched.mjs                V1/V2/V3 优化后的 bundle
-      feishu-tool-aggregation.patch   23-hunk 补丁
-    SHA256SUMS                  已同步
-  tests/
-    _harness.mjs, run-all.mjs
-    test-wayD-105.mjs test-wayB-105.mjs test-wayC-105.mjs
-    exec-agg-105.mjs test-idle-release-105.mjs
-    test-narration-ticker-105.mjs test-display-backfill-105.mjs
-    audit-agg-105.mjs
-    （旧 6 套件保留，用于 10.1/10.2 基线）
-  install.sh                    哈希已更新 + 失败回滚
-  README.md                     已按 V1/V2/V3 实现更新
-  tools/                        finalize.py、verify_patch.py
-  VERIFICATION.md               本文件
+      original.mjs             pristine（本地有，仓库不随附）
+      patched.mjs              patched（本地有，仓库不随附）
+      feishu-tool-aggregation.patch   当前 23-hunk 补丁
+    SHA256SUMS                 本地校验
+  tests/                       2026.10.5 的 8 套件
+  tools/
+    adapt_patch.py             锚点适配器
+    verify_patch.py            严格补丁校验
+    finalize.py                本地生成/同步哈希与 manifest
+  .github/workflows/verify.yml CI 矩阵
+  旧版本（2026.10.1/10.2）     已移出仓库，仅本地归档
 ```
 
 ---

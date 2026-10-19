@@ -400,7 +400,7 @@ tools/
 
 The upstream plugin bundles (`original.mjs` / `patched.mjs`) are not
 redistributed in the GitHub repository; apply the diff to your local installed
-build. The old 2026.10.1/2026.10.2 versions are intentionally not included.
+build. Earlier plugin builds are intentionally not included.
 
 ## License
 
