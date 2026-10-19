@@ -6,8 +6,8 @@
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `patches/2026.10.5/feishu-tool-aggregation.patch` | `6f988c9638bfed08495f0aa4d6d382b3b07a394b10b53c448a2924691a6783f8` |
-| `patches/2026.10.5/patched.mjs` | `1d9eb84636ee7db6c024874e292fe8d44a6f25d1615a67432e09e4ce93f6f3e8` |
+| `patches/2026.10.5/feishu-tool-aggregation.patch` | `81d8eabc88dc35204e6c4189aa087b7eea58ca4506ae324b42b7d12c4e984f1a` |
+| `patches/2026.10.5/patched.mjs` | `c1f24a7bc72e7e0d767e452e021aed8e444972518621431b7e5535f71c03eccc` |
 | `patches/2026.10.5/original.mjs`（未改动） | `72a0a198e31e71e4690e2b86296d53983863e99e8d3a0872ac4cbb83aefe3bfe` |
 
 - 补丁：**23 hunks**，`original.mjs` + patch → `patched.mjs` 正/反向 **byte-exact**，offset 全 +0。
@@ -24,6 +24,7 @@
 | **等待行持久化** | `⏳ 已执行 N 个工具…` 在助手分段/中间文本开始时不再被清空（只清 item/compaction/narration 临时行），持续显示并随工具计数更新，仅在 final/关闭时移除 |
 | **展示打磨 batch 1** | 初始化/处理状态跨 assistant start 保留，消除第二段空白；状态区紧凑为“主行 + 至多一行旁白”；等待行增加最后工具与耗时（5s 刷新）；旁白上限可配，默认 120 字 |
 | **展示打磨 batch 2** | 耗时刷新默认 15s 可配（`toolElapsedRefreshMs`），关闭 elapsed 不启动定时器；`cardStatusPosition` 支持 status 上下 A/B；reasoning 预览限行（默认 12 行）且 final 默认隐藏 thinking；可选 final 工具摘要（默认关闭） |
+| **单卡生命周期修复** | onIdle 只代表 dispatcher 分段空闲；活动卡保持到 final，避免预热卡提前关闭后 block/final 新建重复卡片；onCleanup 兜底 silent/abort |
 | **最新态回填** | `flushCardUpdate` 向队列传 render provider，队列在 `await streamingStartPromise` 之后渲染**最新**展示状态；卡片创建期间更新合并为一次 pending flush（`cardFlushPending`），不再重放旧帧 |
 | **ticker 打磨** | 相同旁白去重、`truncateDisplayText` 按 code point 截断（修复代理对截断），max chars 可配 |
 | **进度计数** | 引入 `aggregatedToolTotal` 运行总数，去掉每个工具事件的全 map `reduce` |

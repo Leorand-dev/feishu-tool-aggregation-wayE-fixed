@@ -73,6 +73,10 @@ ok("mid-turn block fold intact", count(src, "const midTurnBlockFold =") === 1);
 ok("counts cleared on reset", /const resetStreamingState = \(\) => \{[\s\S]*?aggregatedToolSummaryCounts\.clear\(\);/.test(src));
 ok("counts cleared on reply start", /onReplyStart: async \(\) => \{[\s\S]*?aggregatedToolSummaryCounts\.clear\(\);/.test(src));
 ok("failed outcome releases hold", /replyOutcome\?\.kind === "failed"/.test(src));
+ok("final delivery tracked for lifecycle", /let finalDeliverySeen = false;/.test(src) && /if \(info\?\.kind === "final"\) finalDeliverySeen = true;/.test(src));
+ok("active card held until final", /streaming\?\.isActive\(\) === true && !finalDeliverySeen && !terminalQuiet/.test(src));
+ok("cleanup finalizes active card", /onCleanup: \(\) => \{\s*typingCallbacks\?\.onCleanup\?\.\(\);\s*if \(streaming\?\.isActive\(\) === true\)/.test(src) && /cleanup card finalization failed/.test(src));
+
 ok("waiting line persists across assistant starts", /if \(aggregatedToolTotal > 0\) clearTransientStatusLines\(\);\s*else if \(streamText\.trim\(\) \|\| reasoningText\.trim\(\)\) clearCardStatusLines\(\);/.test(src));
 ok("transient clear keeps waiting line", /const clearTransientStatusLines = \(\) => \{\s*itemStatusLine = "";\s*compactionLine = "";\s*narrationLine = "";/.test(src));
 ok("idle hold uses running total", /const hasToolActivity = aggregatedToolTotal > 0;/.test(src));

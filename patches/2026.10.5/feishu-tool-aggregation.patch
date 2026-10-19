@@ -180,7 +180,7 @@
  const NO_VISIBLE_REPLY_FALLBACK_TEXT = "⚠️ This reply completed without visible content. The turn may have been interrupted; please retry or ask me to recover from recent context.";
  function isStreamingStartBackedOff(accountId, now = Date.now()) {
  	const backoffUntil = streamingStartBackoffUntilByAccount.get(accountId);
-@@ -1638,7 +1745,47 @@
+@@ -1638,7 +1745,48 @@
  	let streamText = "";
  	let lastPartial = "";
  	let reasoningText = "";
@@ -193,6 +193,7 @@
 +	let aggregatedToolTotal = 0;
 +	let prewarmRequested = false;
 +	let prewarmStatusLine = "";
++	let finalDeliverySeen = false;
 +	let renderEpoch = 0;
 +	let cardFlushPending = false;
 +	const NARRATION_MAX_CHARS = (() => {
@@ -229,7 +230,7 @@
  	let snapshotBaseText = "";
  	let lastSnapshotTextLength = 0;
  	let hasStreamingFinalText = false;
-@@ -1659,22 +1806,133 @@
+@@ -1659,22 +1807,133 @@
  	const pendingStreamingDeliveries = [];
  	const formatReasoningPrefix = (thinking) => {
  		if (!thinking) return "";
@@ -372,7 +373,7 @@
  	const queueStreamingUpdate = (nextText, options) => {
  		if (!nextText) return;
  		if (options?.dedupeWithLastPartial && nextText === lastPartial) return;
-@@ -1688,10 +1946,13 @@
+@@ -1688,10 +1947,13 @@
  			} else streamText = `${snapshotBaseText}${mergeStreamingText(currentSnapshotText, nextText)}`;
  			lastSnapshotTextLength = nextText.length;
  		}
@@ -387,7 +388,7 @@
  		streamingStartPromise = (async () => {
  			const creds = account.appId && account.appSecret ? {
  				appId: account.appId,
-@@ -1700,7 +1961,8 @@
+@@ -1700,7 +1962,8 @@
  				httpTimeoutMs: resolveConfiguredHttpTimeoutMs(account)
  			} : null;
  			if (!creds) return;
@@ -397,7 +398,7 @@
  			const generation = ++streamingGeneration;
  			streaming = session;
  			activeStreamingGeneration = generation;
-@@ -1715,6 +1977,12 @@
+@@ -1715,6 +1978,12 @@
  					header: cardHeader,
  					note: cardNote
  				});
@@ -410,7 +411,7 @@
  				streamingStartBackoffUntilByAccount.delete(account.accountId);
  			} catch (error) {
  				streamingStartBackoffUntilByAccount.set(account.accountId, Date.now() + STREAMING_START_FAILURE_BACKOFF_MS);
-@@ -1735,11 +2003,45 @@
+@@ -1735,11 +2004,46 @@
  		streamText = "";
  		lastPartial = "";
  		reasoningText = "";
@@ -422,6 +423,7 @@
 +		lastToolLabel = "";
 +		prewarmRequested = false;
 +		prewarmStatusLine = "";
++		finalDeliverySeen = false;
 +		cardFlushPending = false;
 +		clearWaitingRefreshTimer();
 +		toolPhaseStartedAt = 0;
@@ -457,7 +459,7 @@
  	const rememberClosedStreamingSettlement = (generation, content, result, error, disposition = "closed") => {
  		if (generation === void 0 || !content && disposition === "closed") return;
  		closedStreamingSettlements.set(generation, {
-@@ -1750,6 +2052,11 @@
+@@ -1750,6 +2054,11 @@
  		});
  	};
  	const performStreamingClose = async (disposition) => {
@@ -469,7 +471,7 @@
  		const streamingToClose = streaming;
  		const generationToClose = activeStreamingGeneration;
  		const startPromiseToClose = streamingStartPromise;
-@@ -1767,11 +2074,22 @@
+@@ -1767,11 +2076,22 @@
  			let result = noVisibleFeishuReplyDelivery;
  			let finalizationError;
  			if (streamingToClose?.isActive()) {
@@ -495,7 +497,7 @@
  					else {
  						const finalNote = resolveCardNote(agentId, identity, responsePrefixContextProvider());
  						closed = await streamingToClose.closeWithResult(text, { note: finalNote });
-@@ -1853,13 +2171,128 @@
+@@ -1853,13 +2173,128 @@
  		const outcome = await closeStreaming("discarded");
  		if (outcome.error !== void 0) throw toStringifiedError(outcome.error);
  	};
@@ -630,15 +632,18 @@
  	const sendChunkedTextReply = async (paramsLocal) => {
  		const header = paramsLocal.useCard ? resolveCardHeader(agentId, identity) : void 0;
  		const note = paramsLocal.useCard ? resolveCardNote(agentId, identity, responsePrefixContextProvider()) : void 0;
-@@ -2125,11 +2558,38 @@
+@@ -2125,13 +2560,50 @@
  				idleRequestedForReply = false;
  				visibleReplySent = false;
  				replyOutcome = void 0;
+-			}
+-			if (previewStreamingEnabled && renderMode === "card") startStreaming();
 +				aggregatedToolSummaryCounts.clear();
 +				aggregatedToolTotal = 0;
 +				lastToolLabel = "";
 +				prewarmRequested = false;
 +				prewarmStatusLine = "";
++				finalDeliverySeen = false;
 +				cardFlushPending = false;
 +				clearCardStatusLines();
 +				clearWaitingRefreshTimer();
@@ -646,8 +651,7 @@
 +				clearIdleCloseTimer();
 +				lastToolActivityAt = 0;
 +				renderEpoch += 1;
- 			}
--			if (previewStreamingEnabled && renderMode === "card") startStreaming();
++			}
 +			if (previewStreamingEnabled && renderMode !== "raw" && account.config?.prewarmCard !== false) {
 +				prewarmRequested = true;
 +				startStreaming();
@@ -657,11 +661,17 @@
  		},
 -		onIdle: queueIdleSideEffects,
 +		onIdle: () => {
-+			// Hold the card across tool batches: only defer while tools were recently active and
-+			// no real reply content (text/reasoning/final/visible media) has been delivered yet.
 +			const terminalQuiet = replyOutcome?.kind === "suppressed" || replyOutcome?.kind === "failed" || replyOutcome?.kind === "skipped" && replyOutcome.reason === "silent";
++			// The core dispatcher reports "idle" between tool/block segments, not just
++			// at turn end. Closing the warmed card here creates a second/third card when
++			// the model later emits a block or final reply. Hold an active card until a
++			// final delivery (or terminal/abort cleanup) arrives; then close it.
++			if (streaming?.isActive() === true && !finalDeliverySeen && !terminalQuiet) {
++				clearIdleCloseTimer();
++				return;
++			}
 +			const hasToolActivity = aggregatedToolTotal > 0;
-+			if (!streamText && !reasoningText && deliveredFinalTexts.size === 0 && !visibleReplySent && !terminalQuiet && hasToolActivity && Date.now() - lastToolActivityAt < CARD_IDLE_HOLD_MS) {
++			if (!streaming?.isActive() && !streamText && !reasoningText && deliveredFinalTexts.size === 0 && !visibleReplySent && !terminalQuiet && hasToolActivity && Date.now() - lastToolActivityAt < CARD_IDLE_HOLD_MS) {
 +				scheduleIdleCloseTimer();
 +				return;
 +			}
@@ -670,11 +680,17 @@
 +		},
  		onCleanup: () => {
  			typingCallbacks?.onCleanup?.();
++			if (streaming?.isActive() === true) {
++				queueIdleSideEffects().catch((error) => params.runtime.error?.(`feishu[${account.accountId}] cleanup card finalization failed: ${String(error)}`));
++			}
  		}
-@@ -2157,6 +2617,23 @@
+ 	};
+ 	const handleDeliveryError = async (error, info) => {
+@@ -2157,6 +2629,24 @@
  				};
  			},
  			deliver: async (inputPayload, info) => {
++				if (info?.kind === "final") finalDeliverySeen = true;
 +				const collapsibleToolSummary = parseCollapsibleToolSummary(inputPayload, info) ?? parseBareToolLabel(inputPayload, info);
 +				if (collapsibleToolSummary && await aggregateCollapsibleToolSummary(collapsibleToolSummary)) return noVisibleFeishuReplyDelivery;
 +				// Only provable mid-turn narration (live shape: {text:"\u{1F4AC} ..."}, no media
@@ -695,7 +711,7 @@
  				const prepared = await renderFeishuReplyPayload(inputPayload, {
  					to: sendTarget,
  					identity,
-@@ -2184,7 +2661,8 @@
+@@ -2184,7 +2674,8 @@
  					ttsSupplement
  				}));
  				const finalTextExceedsStreamingLimit = info?.kind === "final" && hasText && text.length > textChunkLimit;
@@ -705,7 +721,7 @@
  				const useStaticCard = hasText && cardRenderingRequested && withinCardTableLimit(text);
  				const useStreamingCard = hasText && streamingEnabled && !finalTextExceedsStreamingLimit && (info?.kind === "final" || cardRenderingRequested);
  				const skipTextForDuplicateFinal = !hasIndependentPresentation && info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
-@@ -2254,7 +2732,7 @@
+@@ -2254,7 +2745,7 @@
  								hasStreamingFinalText = true;
  								snapshotBaseText = "";
  								lastSnapshotTextLength = text.length;
@@ -714,7 +730,7 @@
  							}
  						}
  						if (hasMedia) try {
-@@ -2309,15 +2787,21 @@
+@@ -2309,15 +2800,21 @@
  				startStreaming();
  				const nextThinking = formatReasoningMessage(payload.text);
  				if (nextThinking) {
@@ -737,7 +753,7 @@
  				const statusLineLocal = formatChannelProgressDraftLineForEntry(account.config, {
  					event: "item",
  					itemKind,
-@@ -2326,9 +2810,37 @@
+@@ -2326,9 +2823,37 @@
  				if (statusLineLocal) return updateStreamingStatusLine(statusLineLocal);
  				return false;
  			} : void 0,

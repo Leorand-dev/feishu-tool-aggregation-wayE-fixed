@@ -115,6 +115,12 @@ shape check fell through to a standalone reply. The discriminating signal is
     (`finalToolSummary`, default off). Elapsed refresh is now 15s by default
     and configurable via `toolElapsedRefreshMs`; disabling `showToolElapsed`
     skips the refresh timer entirely.
+15. **Single-card lifecycle fix** — the core dispatcher's `onIdle` is a
+    between-segments idle signal, not end-of-turn. Closing the warmed card there
+    made block/final deliveries open 2–3 duplicate cards. An active streaming
+    card is now held until a final delivery; `onCleanup` finalizes silent/abort
+    turns. Live verified: one user message → one `Started streaming` / one
+    `Closed streaming`.
 13. **Cleanup** — earlier port leftovers (`markVisibleReplySent`,
     `buildAggregatedToolSummaryLine`, `aggregatedToolSummaryLine`,
     `backfillTotal`, the card/tool backfill block) are removed.
@@ -123,7 +129,7 @@ shape check fell through to a standalone reply. The discriminating signal is
 
 | plugin build | patch file | pristine sha256 | patched sha256 |
 | --- | --- | --- | --- |
-| `@openclaw/feishu` 2026.10.5 | `patches/2026.10.5/feishu-tool-aggregation.patch` | `72a0a198…3bfe` | `1d9eb846…f3e8` |
+| `@openclaw/feishu` 2026.10.5 | `patches/2026.10.5/feishu-tool-aggregation.patch` | `72a0a198…3bfe` | `c1f24a7b…eccc` |
 
 This repository starts with **one supported initial build**. New builds are not
 silently fuzzy-patched: the installer compares SHA-256 against the known

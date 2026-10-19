@@ -18,6 +18,8 @@ let visibleReplySent = false;
 const deliveredFinalTexts = new Set();
 let replyOutcome;
 let aggregatedToolTotal = 0;
+let streaming = null;
+let finalDeliverySeen = false;
 let timers = [];
 let clearedTimers = 0;
 let queued = 0;
@@ -48,7 +50,9 @@ return {
   resetVisible: () => { visibleReplySent = false; },
   setOutcome: (o) => { replyOutcome = o; },
   addFinalText: (v) => deliveredFinalTexts.add(v),
-  setReject: (v) => { rejectQueued = v; }
+  setReject: (v) => { rejectQueued = v; },
+  setActiveStreaming: (v) => { streaming = { isActive: () => v }; },
+  setFinalSeen: (v) => { finalDeliverySeen = v; }
 };
 `)();
 
@@ -120,6 +124,24 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
   ok("window counts from last activity (~5s)", delay2 > 4800 && delay2 <= 5000, `delay=${delay2}`);
   sandbox.clearIdleCloseTimer();
   ok("new activity can clear pending timer", sandbox.getTimer() === undefined);
+
+  // 7b) active streaming card: hold on dispatcher idle until final/terminal
+  sandbox.setActiveStreaming(true);
+  sandbox.setFinalSeen(false);
+  sandbox.setOutcome(undefined);
+  sandbox.addTool();
+  sandbox.setActivity(10);
+  const queuedBeforeHold = sandbox.queued();
+  const timersBeforeHold = sandbox.timers().length;
+  ok("active card held on dispatcher idle (no final yet)", sandbox.onIdle() === undefined);
+  ok("active card hold does not schedule close timer", sandbox.timers().length === timersBeforeHold);
+  ok("active card hold does not queue idle effects", sandbox.queued() === queuedBeforeHold);
+  sandbox.setFinalSeen(true);
+  const finalIdle = sandbox.onIdle();
+  ok("active card closes once final seen", await Promise.resolve(finalIdle) === "ok");
+  ok("final idle queue increments once", sandbox.queued() === queuedBeforeHold + 1);
+  sandbox.setActiveStreaming(false);
+  sandbox.setFinalSeen(false);
 
   // 8) helpers used by close/reset/new-reply paths
   ok("performStreamingClose clears hold timer", /const performStreamingClose = async[\s\S]{0,300}clearIdleCloseTimer\(\);/.test(src));
