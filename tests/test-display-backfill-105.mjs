@@ -75,7 +75,7 @@ ok("status element endpoint used", /`\/\$\{this\.state\.cardId\}\/elements\/stat
 ok("status write uses shared sequence/uuid", /uuid: `st_\$\{this\.state\.cardId\}_\$\{this\.state\.sequence\}`/.test(src));
 ok("status update failure marks unavailable", /this\.statusUnavailable = true;/.test(src));
 ok("status failure falls back into content", /!statusElementEnabled \|\| streaming\?\.isStatusUnavailable\?\.\(\) === true \? buildStatusText\(\) : ""/.test(src));
-ok("close clears status element with zero-width marker", /this\.statusSentText !== "\\u200B"\) \{\s*this\.statusSentText = "\\u200B";\s*await this\.writeStatusContent\("\\u200B"\)/.test(src));
+ok("close deletes status element (fallback zero-width)", /async deleteStatusElement\(\) \{/.test(src) && /const deleted = await this\.deleteStatusElement\(\)\.catch\(\(\) => false\);/.test(src));
 ok("empty status maps to zero-width marker", /CardKit rejects empty element content/.test(src) && /const safeText = typeof text === "string" && text\.trim\(\) !== "" \? text : "\\u200B";/.test(src));
 ok("updateStatus normalizes empty text", /const safeText = text\.trim\(\) !== "" \? text : "\\u200B";/.test(src));
 ok("status updates throttled", /schedulePendingStatusFlush/.test(src) && /statusLastUpdateTime/.test(src));
@@ -110,7 +110,7 @@ return buildStatusText;
 ok("compact status: waiting + one secondary line", statusFn() === "waiting\nnarration · item · compact", JSON.stringify(statusFn()));
 
 // ---------- 5) display batch 1: compact status, elapsed/last tool, narration cap, timer ----------
-ok("narration max configurable and default 120", /const configured = Number\(account\.config\?\.narrationMaxChars\);\s*return Number\.isFinite\(configured\) && configured >= 40 && configured <= 500 \? configured : 120;/.test(src));
+ok("narration max configurable and default 80", /const configured = Number\(account\.config\?\.narrationMaxChars\);\s*return Number\.isFinite\(configured\) && configured >= 40 && configured <= 500 \? configured : 80;/.test(src));
 ok("status lines use single newline", /return truncateDisplayText\(lines\.join\("\\n"\), STATUS_MAX_CHARS\)/.test(src));
 ok("waiting line has last-tool detail", /SHOW_LAST_TOOL_LABEL && lastToolLabel/.test(src) && /const details = \[\];/.test(src));
 ok("waiting line has elapsed detail", /SHOW_TOOL_ELAPSED && toolPhaseStartedAt > 0/.test(src) && /formatElapsedDuration\(elapsedMs\)/.test(src));

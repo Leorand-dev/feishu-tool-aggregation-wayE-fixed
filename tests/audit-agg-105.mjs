@@ -32,7 +32,7 @@ ok("running total counter exists", /let aggregatedToolTotal = 0;/.test(src) && /
 ok("no per-event reduce over counts", !src.includes("Array.from(aggregatedToolSummaryCounts.values()).reduce"));
 ok("status renderer combines fields", /const primary = waitingLine \|\| itemStatusLine \|\| compactionLine \|\| narrationLine;/.test(src) && /const secondary = extras\.length > 0/.test(src));
 ok("content renderer separated from status", /const body = buildCombinedStreamText\(reasoningText, streamText\);/.test(src) && /const statusFallback = !statusElementEnabled \|\| streaming\?\.isStatusUnavailable\?\.\(\) === true \? buildStatusText\(\) : "";/.test(src));
-ok("flush uses latest-state providers", /content: \(\) => renderCardContent\(\),\s*status: \(\) => buildStatusText\(\),/.test(src));
+ok("flush uses latest-state providers + dirty split", /content: contentChanged \? \(\) => renderCardContent\(\) : void 0/.test(src) && /status: statusChanged \? \(\) => buildStatusText\(\) : void 0/.test(src) && /nextContent !== lastQueuedContent/.test(src));
 ok("card-start pending flush is coalesced", /cardFlushPending/.test(src) && /if \(!active && cardFlushPending && !force\) return;/.test(src));
 ok("queue evaluates providers after start", /if \(startPromise\) await startPromise;[\s\S]{0,200}const contentText = typeof content === "function" \? content\(\) : content \?\? text;/.test(src));
 ok("identical card text deduped by session", /if \(this\.statusPendingText === null \|\| this\.closed\) return;/.test(src));
@@ -47,7 +47,7 @@ ok("surrogate-safe truncate helper", /const truncateDisplayText = \(text, max\) 
 ok("card JSON has status element", /element_id: "status"/.test(src) && /this\.statusElementEnabled && this\.statusPosition === "top"/.test(src) && /this\.statusElementEnabled && this\.statusPosition !== "top"/.test(src));
 ok("session updates status element", /async updateStatus\(text\) \{/.test(src) && src.includes("elements/status/content"));
 ok("status write asserts CardKit response", /assertSuccessfulCardKitResponse\(response, auditContext, "Update card status content"\)/.test(src));
-ok("close clears status element with zero-width marker", /this\.statusSentText !== "\\u200B"\) \{\s*this\.statusSentText = "\\u200B";\s*await this\.writeStatusContent\("\\u200B"\)/.test(src));
+ok("close deletes status element", /async deleteStatusElement\(\) \{/.test(src) && src.includes("elements/status") && /Delete card status element/.test(src));
 ok("status failure falls back into content", /streaming\?\.isStatusUnavailable\?\.\(\) === true \? buildStatusText\(\)/.test(src) && /onStatusUnavailable: \(\) => \{/.test(src));
 ok("status updates throttled", /statusLastUpdateTime/.test(src) && /schedulePendingStatusFlush/.test(src));
 
@@ -70,6 +70,10 @@ ok("waiting line shows last tool / elapsed", /SHOW_LAST_TOOL_LABEL && lastToolLa
 ok("completed string intact", src.includes("\\u2705 \\u5df2\\u6267\\u884c {count} \\u4e2a\\u5de5\\u5177"));
 ok("bare-label whitelist intact", src.includes("const BARE_TOOL_LABELS = "));
 ok("block text not blindly appended", /if \(info\?\.kind === "block"\) queueStreamingBlockUpdate\(text\);/.test(src) && !/if \(info\?\.kind === "block"\) queueStreamingUpdate\(text, \{/.test(src));
+ok("final summary falls back to Chinese status", /if \(!clean\) return "✅ 已回复";/.test(src));
+ok("tool-done status line declared", /const buildToolDoneLine = \(total\) =>/.test(src) && src.includes('"toolDone"'));
+ok("elapsed refresh coalesced with tool events", /clearWaitingRefreshTimer\(\);\s*scheduleWaitingRefresh\(\);/.test(src));
+ok("dirty split skips unchanged fields", /nextContent !== lastQueuedContent/.test(src) && /nextStatus !== lastQueuedStatus/.test(src));
 ok("block merge dedupes overlapping text", /streamText = mergeStreamingText\(streamText, nextText\);/.test(src) && /queueStreamingBlockUpdate/.test(src));
 ok("mid-turn block fold intact", count(src, "const midTurnBlockFold =") === 1);
 ok("counts cleared on reset", /const resetStreamingState = \(\) => \{[\s\S]*?aggregatedToolSummaryCounts\.clear\(\);/.test(src));
@@ -82,7 +86,7 @@ ok("final delivery tracked for lifecycle", /let finalDeliverySeen = false;/.test
 ok("active card held until final", /streaming\?\.isActive\(\) === true && !finalDeliverySeen && !terminalQuiet/.test(src));
 ok("cleanup finalizes active card", /onCleanup: \(\) => \{\s*typingCallbacks\?\.onCleanup\?\.\(\);\s*if \(streaming\?\.isActive\(\) === true\)/.test(src) && /cleanup card finalization failed/.test(src));
 
-ok("waiting line persists across assistant starts", /if \(aggregatedToolTotal > 0\) clearTransientStatusLines\(\);\s*else if \(streamText\.trim\(\) \|\| reasoningText\.trim\(\)\) clearCardStatusLines\(\);/.test(src));
+ok("waiting line switches to tool-done on assistant start", /if \(aggregatedToolTotal > 0\) \{\s*clearTransientStatusLines\(\);\s*toolPhaseCompleted = true;\s*clearWaitingRefreshTimer\(\);\s*waitingLine = buildToolDoneLine\(aggregatedToolTotal\);/.test(src));
 ok("transient clear keeps waiting line", /const clearTransientStatusLines = \(\) => \{\s*itemStatusLine = "";\s*compactionLine = "";\s*narrationLine = "";/.test(src));
 ok("idle hold uses running total", /const hasToolActivity = aggregatedToolTotal > 0;/.test(src));
 ok("timer lifecycle preserved", /const clearIdleCloseTimer = \(\) => \{/.test(src) && /idleCloseTimer\.unref\?\.\(\);/.test(src) && /!visibleReplySent && !terminalQuiet/.test(src));

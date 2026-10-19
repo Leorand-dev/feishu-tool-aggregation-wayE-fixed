@@ -42,7 +42,7 @@ shape check fell through to a standalone reply. The discriminating signal is
 - `Array.isArray(undefined)` is `false`, so a value-based check wrongly rejects
   real tool events (this is what an earlier, rejected revision did).
 
-## The patch (25 hunks)
+## The patch (26 hunks)
 
 1. **Parser discriminator** — accept `kind:"tool"` only when an own `mediaUrls`
    key exists and its value is `undefined` or an empty array; ignore its empty
@@ -108,6 +108,10 @@ shape check fell through to a standalone reply. The discriminating signal is
     `prewarmCard`; 15s start-failure
     backoff; card-start latency logs; running tool total (no per-event reduce)
     and surrogate-safe truncation.
+13. **Cleanup** — earlier port leftovers (`markVisibleReplySent`,
+    `buildAggregatedToolSummaryLine`, `aggregatedToolSummaryLine`,
+    `backfillTotal`, the card/tool backfill block) are removed.
+
 14. **Display polish batch 2** — `cardStatusPosition: top|bottom` A/B switch,
     reasoning preview capped at `reasoningMaxLines` (default 12) with an
     ellipsis, thinking hidden from the final card by default
@@ -128,15 +132,17 @@ shape check fell through to a standalone reply. The discriminating signal is
     final content and `ensureVisibleStreamingDelivery` records final fallback
     sends, closing the remaining duplicate-final gap.
 
-13. **Cleanup** — earlier port leftovers (`markVisibleReplySent`,
-    `buildAggregatedToolSummaryLine`, `aggregatedToolSummaryLine`,
-    `backfillTotal`, the card/tool backfill block) are removed.
-
+17. **Display/perf batch** — final card summary strips markdown and falls back to
+    `✅ 已回复`; status switches to `✅ 已执行 N 个工具 · 生成回复中…` when the
+    assistant starts; status element is deleted at close (fallback zero-width
+    only if delete fails); narration default is 80 chars; elapsed heartbeat is
+    restarted after tool events instead of firing independently; content/status
+    dirty checks skip unchanged APIs.
 ## Version table
 
 | plugin build | patch file | pristine sha256 | patched sha256 |
 | --- | --- | --- | --- |
-| `@openclaw/feishu` 2026.10.5 | `patches/2026.10.5/feishu-tool-aggregation.patch` | `72a0a198…3bfe` | `bdd38bc8…a5d4` |
+| `@openclaw/feishu` 2026.10.5 | `patches/2026.10.5/feishu-tool-aggregation.patch` | `72a0a198…3bfe` | `2b3af8e4…0c68` |
 
 This repository starts with **one supported initial build**. New builds are not
 silently fuzzy-patched: the installer compares SHA-256 against the known
@@ -230,11 +236,12 @@ instead of being dropped — content safety comes before "zero bubbles".
 | `cardIdleHoldMs` | `8000` | tool-batch hold window (2–30s) |
 | `progressTexts.toolWaiting` | `⏳ 已执行 {count} 个工具` | waiting line template |
 | `progressTexts.toolCompleted` | `✅ 已执行 {count} 个工具` | tool-only completion line |
+| `progressTexts.toolDone` | `✅ 已执行 {count} 个工具 · 生成回复中…` | status after tools finish |
 | `progressTexts.compacting` | `📦 **Compacting context...**` | compaction line |
 | `showLastToolLabel` | `true` | append `（最后：Read）`-style detail to the waiting line |
 | `showToolElapsed` | `true` | append elapsed seconds (e.g. `12s`) to the waiting line; disabling skips the refresh timer |
 | `toolElapsedRefreshMs` | `15000` | elapsed refresh interval (5–60s) |
-| `narrationMaxChars` | `120` | max code points for the narration ticker (40–500) |
+| `narrationMaxChars` | `80` | max code points for the narration ticker (40–500) |
 | `progressTexts.processing` | `✍️ 正在生成回复…` | fallback status when assistant starts before first token/tool |
 | `progressTexts.prewarm` | `⏳ 已收到，正在处理…` | initial status on a prewarmed blank card |
 | `cardStatusPosition` | `bottom` | status element position: `bottom` (current) or `top` for always-visible progress (A/B) |
@@ -297,8 +304,8 @@ example `ls -la` without a label), so they also keep legacy delivery rather than
 being counted.
 
 **Status element validation:** CardKit rejects empty element content
-(HTTP 400 / `99992402 field validation failed`), so clearing the status uses a
-zero-width-space marker. A direct CardKit API probe verified create/update/clear
+(HTTP 400 / `99992402 field validation failed`), so the status element is deleted at close;
+zero-width-space is only a fallback if deletion fails. A direct CardKit API probe verified create/update/clear
 for the `status` element in streaming mode. If a live call still fails, the
 session marks status unavailable and automatically falls back to rendering
 status inside the content element. Set `cardStatusElement: false` to force the

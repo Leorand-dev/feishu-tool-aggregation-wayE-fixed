@@ -41,7 +41,7 @@ ok("compaction start yields to tool batch", /onCompactionStart:[\s\S]{0,220}aggr
 ok("compaction end clears line", /onCompactionEnd:[\s\S]{0,160}compactionLine = "";/.test(src));
 
 // --- assistant text still owns the card ---
-ok("assistant start clears transient status / keeps initial status when blank", /onAssistantMessageStart: previewStreamingEnabled \? \(\) => \{\s*renderEpoch \+= 1;\s*if \(aggregatedToolTotal > 0\) clearTransientStatusLines\(\);\s*else if \(streamText\.trim\(\) \|\| reasoningText\.trim\(\)\) clearCardStatusLines\(\);\s*else \{[\s\S]{0,400}if \(!prewarmStatusLine && !waitingLine\) \{/.test(src) && /const clearTransientStatusLines = \(\) => \{/.test(src));
+ok("assistant start clears transient status / keeps initial status when blank", /onAssistantMessageStart: previewStreamingEnabled \? \(\) => \{\s*renderEpoch \+= 1;\s*if \(aggregatedToolTotal > 0\) \{\s*clearTransientStatusLines\(\);\s*toolPhaseCompleted = true;\s*clearWaitingRefreshTimer\(\);\s*waitingLine = buildToolDoneLine\(aggregatedToolTotal\);/.test(src) && /const clearTransientStatusLines = \(\) => \{/.test(src));
 ok("structured status fields exist", ["waitingLine", "itemStatusLine", "compactionLine", "narrationLine"].every((v) => src.includes(`let ${v} = "";`)));
 ok("status renderer joins structured fields", /const primary = waitingLine \|\| itemStatusLine \|\| compactionLine \|\| narrationLine;/.test(src) && /const secondary = extras\.length > 0/.test(src));
 

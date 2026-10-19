@@ -14,6 +14,7 @@ let aggregatedToolTotal = 0;
 let lastToolLabel = "";
 let toolPhaseStartedAt = 0;
 const scheduleWaitingRefresh = () => {};
+const clearWaitingRefreshTimer = () => {};
 let lastToolActivityAt = 0;
 let timerClears = 0;
 const aggregatedToolSummaryCounts = new Map();

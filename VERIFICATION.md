@@ -6,11 +6,11 @@
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `patches/2026.10.5/feishu-tool-aggregation.patch` | `82e2a29e2f3c05e7be8828601013b84bfe7e0b7618a2ed350e8f5ff25d967ff7` |
-| `patches/2026.10.5/patched.mjs` | `bdd38bc8c94c971255d45aff2011f256a1aea84c547f021f2df107c77946a5d4` |
+| `patches/2026.10.5/feishu-tool-aggregation.patch` | `ae10e953e2d8e5b41d7e5089d3fae27a13a265a83e95e867cddcc8b2845fc046` |
+| `patches/2026.10.5/patched.mjs` | `2b3af8e44abc4bd580ccdf27a77ba2e85e53c2a46051fedfa6d5c01ba9270c68` |
 | `patches/2026.10.5/original.mjs`（未改动） | `72a0a198e31e71e4690e2b86296d53983863e99e8d3a0872ac4cbb83aefe3bfe` |
 
-- 补丁：**25 hunks**，`original.mjs` + patch → `patched.mjs` 正/反向 **byte-exact**，offset 全 +0。
+- 补丁：**26 hunks**，`original.mjs` + patch → `patched.mjs` 正/反向 **byte-exact**，offset 全 +0。
 - `original.mjs` 与 npm 官方 `@openclaw/feishu@2026.10.5` 的 `dist/.setup/monitor.account-*.mjs` 完全一致。
 - `patches/SHA256SUMS`、`install.sh`、`README.md` 版本表均已同步。
 
@@ -26,6 +26,7 @@
 | **展示打磨 batch 2** | 耗时刷新默认 15s 可配（`toolElapsedRefreshMs`），关闭 elapsed 不启动定时器；`cardStatusPosition` 支持 status 上下 A/B；reasoning 预览限行（默认 12 行）且 final 默认隐藏 thinking；可选 final 工具摘要（默认关闭） |
 | **单卡生命周期修复** | onIdle 只代表 dispatcher 分段空闲；活动卡保持到 final，避免预热卡提前关闭后 block/final 新建重复卡片；onCleanup 兜底 silent/abort |
 | **正文/ final 去重** | block 文本使用 `mergeStreamingText` 合并，避免正文重复；`deliveredFinalTexts` 记录 fallback final 内容，`ensureVisibleStreamingDelivery` 记录 final fallback，堵住重复 final 路径 |
+| **展示/性能收尾** | final summary 去 markdown/中文兜底；工具后状态切到“生成回复中”；close 删除 status 元素消除空隙；旁白默认 80 字；耗时刷新与工具事件合并；content/status 脏字段拆分 |
 | **最新态回填** | `flushCardUpdate` 向队列传 render provider，队列在 `await streamingStartPromise` 之后渲染**最新**展示状态；卡片创建期间更新合并为一次 pending flush（`cardFlushPending`），不再重放旧帧 |
 | **ticker 打磨** | 相同旁白去重、`truncateDisplayText` 按 code point 截断（修复代理对截断），max chars 可配 |
 | **进度计数** | 引入 `aggregatedToolTotal` 运行总数，去掉每个工具事件的全 map `reduce` |
@@ -57,7 +58,7 @@
 | 检查 | 结果 |
 | --- | --- |
 | `node --check patched.mjs` | exit 0 |
-| 补丁应用 | 25 hunks，offset 全 +0，forward **byte-exact** |
+| 补丁应用 | 26 hunks，offset 全 +0，forward **byte-exact** |
 | 反向应用 | reverse **byte-exact** |
 | `SHA256SUMS` | 9/9 一致（10.1/10.2 未改动） |
 
@@ -71,8 +72,8 @@
 31 passed, 0 failed (2026.10.5 idle/timer/content)
 32 passed, 0 failed (2026.10.5 narration ticker)
 55 passed, 0 failed (2026.10.5 display/backfill/session)
-92 passed, 0 failed (2026.10.5 structural audit)
-8/8 suites passed, 0 failed — 349 assertions
+96 passed, 0 failed (2026.10.5 structural audit)
+8/8 suites passed, 0 failed — 353 assertions
 ```
 
 新增 `test-display-backfill-105.mjs` 覆盖：
